@@ -1,0 +1,50 @@
+{
+  "documents": [
+    {
+      "id": "general-concepts",
+      "filename": "lecture_02_general_concepts_for_ml.pdf",
+      "sha256": "a761ddaa2edf857f5b1a079e2c331a22bf777bf68e097e60752a81e1b3b2b91b",
+      "page_count": 65,
+      "cases": [
+        {
+          "id": "entropy-measurement",
+          "question": "What does entropy measure in data?",
+          "expected_page": 44
+        },
+        {
+          "id": "categorical-distribution",
+          "question": "Which distribution generalizes Bernoulli to more than two outcomes?",
+          "expected_page": 36
+        },
+        {
+          "id": "mutual-information",
+          "question": "What does mutual information measure?",
+          "expected_page": 45
+        }
+      ]
+    },
+    {
+      "id": "linear-regression",
+      "filename": "lecture_03_linear_regression.pdf",
+      "sha256": "c596153eea479546e7be702da4aa8a4efc4ad487e6c1b510da2bed0a2fc9bbb1",
+      "page_count": 55,
+      "cases": [
+        {
+          "id": "batch-gradient-descent",
+          "question": "What does each batch gradient descent step use?",
+          "expected_page": 40
+        },
+        {
+          "id": "large-learning-rate",
+          "question": "What can happen if the learning rate is too large?",
+          "expected_page": 45
+        },
+        {
+          "id": "normal-equation",
+          "question": "Which analytical method solves the equation to find w?",
+          "expected_page": 47
+        }
+      ]
+    }
+  ]
+}
