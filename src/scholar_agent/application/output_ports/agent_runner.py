@@ -1,12 +1,16 @@
-"""Port for goal-oriented agent workflow adapters."""
+"""Port for the unified study-agent workflow adapter."""
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+
+from scholar_agent.application.dtos.agent import (
+    AskStudyAgentRequest,
+    AskStudyAgentResult,
+)
 
 
 class IAgentRunner(ABC):
-    """Runs a multi-step study-agent workflow."""
+    """Plans and runs a constrained study-agent workflow."""
 
     @abstractmethod
-    def run(self, state: Mapping[str, object]) -> Mapping[str, object]:
-        """Run the agent and return its accumulated state."""
+    def run(self, request: AskStudyAgentRequest) -> AskStudyAgentResult:
+        """Run the agent for one validated application request."""

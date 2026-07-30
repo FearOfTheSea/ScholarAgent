@@ -8,7 +8,6 @@ from scholar_agent.application.input_ports.document_library import (
 from scholar_agent.application.input_ports.runtime import CheckRuntimeReadiness
 from scholar_agent.application.input_ports.study_assistant import (
     AnswerQuestion,
-    CompareDocuments,
     GenerateFlashcards,
     GenerateQuiz,
     SummarizeDocument,
@@ -17,7 +16,6 @@ from scholar_agent.application.input_ports.study_assistant import (
 __all__ = [
     "AnswerQuestion",
     "CheckRuntimeReadiness",
-    "CompareDocuments",
     "DeleteDocument",
     "GenerateFlashcards",
     "GenerateQuiz",

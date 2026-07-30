@@ -25,6 +25,10 @@ class GenerateQuizTool:
                 {"prompt": question.prompt, "answer": question.answer}
                 for question in result.questions
             ],
+            "requested_count": result.requested_count,
+            "effective_count": result.effective_count,
+            "maximum_count": result.maximum_count,
+            "notice": result.notice,
         }
 
 

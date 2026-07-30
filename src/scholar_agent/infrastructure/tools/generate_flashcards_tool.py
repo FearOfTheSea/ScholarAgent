@@ -24,6 +24,10 @@ class GenerateFlashcardsTool:
             "cards": [
                 {"front": card.front, "back": card.back} for card in result.cards
             ],
+            "requested_count": result.requested_count,
+            "effective_count": result.effective_count,
+            "maximum_count": result.maximum_count,
+            "notice": result.notice,
         }
 
 

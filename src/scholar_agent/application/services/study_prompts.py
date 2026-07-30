@@ -8,7 +8,7 @@ def answer_question_prompt(question: str, chunks: tuple[RetrievedChunk, ...]) ->
     sources = "\n\n".join(_citation_block(chunk) for chunk in chunks)
     return (
         "Answer only from the source excerpts below. If the excerpts do not "
-        "support an answer, say that the selected documents do not provide "
+        "support an answer, say that the selected document does not provide "
         "enough information. Cite claims with the supplied [source] labels.\n\n"
         f"Question: {question}\n\nSources:\n{sources}"
     )
@@ -37,13 +37,14 @@ def quiz_prompt(source_text: str, question_count: int) -> str:
     """Create a structured quiz-generation prompt."""
     return (
         f"Create exactly {question_count} study questions from the source text.\n"
-        "Return ONLY a JSON array of objects with string keys \"prompt\" and \"answer\".\n"
+        'Return ONLY a JSON array of objects with string keys "prompt" and '
+        '"answer".\n'
         "Do not include any conversational text or explanation outside the JSON.\n\n"
         "Format example:\n"
         "[\n"
         "  {\n"
-        "    \"prompt\": \"Question prompt here\",\n"
-        "    \"answer\": \"Question answer here\"\n"
+        '    "prompt": "Question prompt here",\n'
+        '    "answer": "Question answer here"\n'
         "  }\n"
         "]\n\n"
         f"Source text:\n{source_text}"
@@ -54,30 +55,16 @@ def flashcards_prompt(source_text: str, card_count: int) -> str:
     """Create a structured flashcard-generation prompt."""
     return (
         f"Create exactly {card_count} study flashcards from the source text.\n"
-        "Return ONLY a JSON array of objects with string keys \"front\" and \"back\".\n"
+        'Return ONLY a JSON array of objects with string keys "front" and "back".\n'
         "Do not include any conversational text or explanation outside the JSON.\n\n"
         "Format example:\n"
         "[\n"
         "  {\n"
-        "    \"front\": \"Question or term here\",\n"
-        "    \"back\": \"Answer or definition here\"\n"
+        '    "front": "Question or term here",\n'
+        '    "back": "Answer or definition here"\n'
         "  }\n"
         "]\n\n"
         f"Source text:\n{source_text}"
-    )
-
-
-def compare_documents_prompt(
-    first_chunks: tuple[RetrievedChunk, ...],
-    second_chunks: tuple[RetrievedChunk, ...],
-) -> str:
-    """Create a grounded document-comparison prompt."""
-    first_sources = "\n\n".join(_citation_block(chunk) for chunk in first_chunks)
-    second_sources = "\n\n".join(_citation_block(chunk) for chunk in second_chunks)
-    return (
-        "Compare the two source sets using only their excerpts. Explain key "
-        "similarities and differences, and cite claims with the supplied labels.\n\n"
-        f"Document A:\n{first_sources}\n\nDocument B:\n{second_sources}"
     )
 
 

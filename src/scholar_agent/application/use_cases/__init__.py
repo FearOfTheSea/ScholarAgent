@@ -1,11 +1,9 @@
 """Application use-case implementations."""
 
 from scholar_agent.application.use_cases.answer_question import AnswerQuestionUseCase
+from scholar_agent.application.use_cases.ask_study_agent import AskStudyAgentUseCase
 from scholar_agent.application.use_cases.check_runtime_readiness import (
     CheckRuntimeReadinessUseCase,
-)
-from scholar_agent.application.use_cases.compare_documents import (
-    CompareDocumentsUseCase,
 )
 from scholar_agent.application.use_cases.delete_document import DeleteDocumentUseCase
 from scholar_agent.application.use_cases.generate_flashcards import (
@@ -20,8 +18,8 @@ from scholar_agent.application.use_cases.summarize_document import (
 
 __all__ = [
     "AnswerQuestionUseCase",
+    "AskStudyAgentUseCase",
     "CheckRuntimeReadinessUseCase",
-    "CompareDocumentsUseCase",
     "DeleteDocumentUseCase",
     "GenerateFlashcardsUseCase",
     "GenerateQuizUseCase",

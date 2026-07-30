@@ -29,12 +29,12 @@ class AnswerQuestionUseCase(AnswerQuestion):
         question = self._validation_service.validate_text(request.question, "question")
         citations = self._retriever.retrieve(
             query=question,
-            document_ids=request.document_ids,
+            document_ids=(request.document_id,),
         )
         if not citations:
             return AnswerQuestionResult(
                 answer=(
-                    "The selected documents do not provide enough information to "
+                    "The selected document does not provide enough information to "
                     "answer this question."
                 ),
                 citations=(),

@@ -4,14 +4,12 @@ from abc import ABC, abstractmethod
 
 from scholar_agent.application.dtos.study_requests import (
     AnswerQuestionRequest,
-    CompareDocumentsRequest,
     GenerateFlashcardsRequest,
     GenerateQuizRequest,
     SummarizeDocumentRequest,
 )
 from scholar_agent.application.dtos.study_results import (
     AnswerQuestionResult,
-    CompareDocumentsResult,
     GenerateFlashcardsResult,
     GenerateQuizResult,
     SummarizeDocumentResult,
@@ -32,14 +30,6 @@ class SummarizeDocument(ABC):
     @abstractmethod
     def execute(self, request: SummarizeDocumentRequest) -> SummarizeDocumentResult:
         """Summarize the requested document."""
-
-
-class CompareDocuments(ABC):
-    """Compares two documents."""
-
-    @abstractmethod
-    def execute(self, request: CompareDocumentsRequest) -> CompareDocumentsResult:
-        """Compare the requested documents."""
 
 
 class GenerateQuiz(ABC):

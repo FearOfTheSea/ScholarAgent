@@ -1,259 +1,224 @@
-"""Conditional LangGraph adapter for the goal-oriented study agent."""
+"""Constrained LangGraph adapter for unified study requests."""
 
-from collections.abc import Mapping
 from typing import TypedDict, cast
 
+from scholar_agent.application.dtos.agent import (
+    AskStudyAgentRequest,
+    AskStudyAgentResult,
+    StudyAgentPlanStep,
+    StudyAgentStatus,
+    StudyAgentTaskError,
+    StudyAgentTaskResult,
+    StudyTask,
+)
 from scholar_agent.application.output_ports.agent_runner import IAgentRunner
+from scholar_agent.application.output_ports.llm_provider import ILLMProvider
 from scholar_agent.application.output_ports.tool_executor import IToolExecutor
-
-
-class AgentAction(TypedDict):
-    """One approved tool invocation in the agent plan."""
-
-    tool_name: str
-    description: str
-    arguments: dict[str, object]
+from scholar_agent.infrastructure.adapters.study_agent_planning import (
+    PlannedAction,
+    build_planner_prompt,
+    build_repair_prompt,
+    parse_study_plan,
+)
+from scholar_agent.infrastructure.adapters.study_agent_results import task_result
 
 
 class AgentState(TypedDict, total=False):
-    """State accumulated by the multi-step study graph."""
+    """State accumulated by the unified study graph."""
 
-    goal: str
-    document_ids: list[str]
-    question_count: int
-    session_id: str | None
-    plan: list[dict[str, str]]
-    actions: list[AgentAction]
+    prompt: str
+    document_id: str
+    quiz_count_default: int
+    actions: list[PlannedAction]
     action_index: int
-    completed_tools: list[str]
-    citations: list[dict[str, object]]
-    summaries: list[str]
-    quiz: list[dict[str, str]]
-    recommendations: list[str]
-    errors: list[str]
-    summary: str
+    plan: list[StudyAgentPlanStep]
+    results: list[StudyAgentTaskResult]
+    notices: list[str]
+    errors: list[StudyAgentTaskError]
+    message: str | None
+    planning_error: str | None
 
 
 class LangGraphAgentRunner(IAgentRunner):
-    """Runs a constrained, multi-step study workflow with LangGraph."""
+    """Plan and execute only registered study capabilities."""
 
-    _allowed_tools = {
-        "semantic_search",
-        "summarize_document",
-        "compare_documents",
-        "generate_quiz",
-        "generate_flashcards",
-        "citation_lookup",
-    }
-
-    def __init__(self, tool_executor: IToolExecutor) -> None:
+    def __init__(
+        self,
+        tool_executor: IToolExecutor,
+        llm_provider: ILLMProvider,
+    ) -> None:
         self._tool_executor = tool_executor
+        self._llm_provider = llm_provider
 
-    def run(self, state: Mapping[str, object]) -> Mapping[str, object]:
-        """Build and execute the conditional study graph."""
+    def run(self, request: AskStudyAgentRequest) -> AskStudyAgentResult:
+        """Build, validate, and execute one constrained study graph."""
         from langgraph.graph import END, START, StateGraph
 
-        initial = _initial_state(state)
         graph = StateGraph(AgentState)
         graph.add_node("plan", self._plan)
         graph.add_node("execute_action", self._execute_action)
         graph.add_node("finalize", self._finalize)
         graph.add_edge(START, "plan")
-        graph.add_edge("plan", "execute_action")
+        graph.add_conditional_edges(
+            "plan",
+            self._after_plan,
+            {"execute_action": "execute_action", "finalize": "finalize"},
+        )
         graph.add_conditional_edges(
             "execute_action",
-            self._next_step,
+            self._after_execution,
             {"execute_action": "execute_action", "finalize": "finalize"},
         )
         graph.add_edge("finalize", END)
-        result = graph.compile().invoke(initial)
-        return dict(cast(Mapping[str, object], result))
+        result = graph.compile().invoke(_initial_state(request))
+        return _agent_result(cast(AgentState, result))
 
     def _plan(self, state: AgentState) -> AgentState:
-        goal = state["goal"]
-        document_ids = state["document_ids"]
-        actions: list[AgentAction] = [
-            {
-                "tool_name": "semantic_search",
-                "description": "Find the most relevant evidence for the study goal.",
-                "arguments": {
-                    "query": goal,
-                    "document_ids": document_ids,
-                    "limit": 6,
-                },
-            },
-        ]
-        for document_id in document_ids:
-            actions.append(
-                {
-                    "tool_name": "summarize_document",
-                    "description": (
-                        f"Build a focused summary of document {document_id}."
-                    ),
-                    "arguments": {"document_id": document_id},
-                },
-            )
-        if len(document_ids) >= 2:
-            actions.append(
-                {
-                    "tool_name": "compare_documents",
-                    "description": (
-                        "Compare the selected documents to identify connections "
-                        "and differences."
-                    ),
-                    "arguments": {
-                        "first_document_id": document_ids[0],
-                        "second_document_id": document_ids[1],
-                    },
-                },
-            )
-        if _requests_flashcards(goal):
-            actions.append(
-                {
-                    "tool_name": "generate_flashcards",
-                    "description": "Create flashcards for active recall.",
-                    "arguments": {"document_id": document_ids[0], "card_count": 8},
-                },
-            )
-        actions.append(
-            {
-                "tool_name": "generate_quiz",
-                "description": (
-                    "Generate a quiz to check understanding of the material."
-                ),
-                "arguments": {
-                    "document_id": document_ids[0],
-                    "question_count": state["question_count"],
-                },
-            },
+        definitions = self._tool_executor.capabilities()
+        if not definitions:
+            return {
+                "planning_error": "No study capabilities are registered.",
+                "message": "The study agent is not configured.",
+            }
+
+        prompt = build_planner_prompt(
+            state["prompt"],
+            definitions,
+            state["quiz_count_default"],
         )
-        if any(action["tool_name"] not in self._allowed_tools for action in actions):
-            raise ValueError("Planner produced an unsupported tool.")
+        raw_plan = self._llm_provider.generate(prompt)
+        try:
+            actions, message = parse_study_plan(
+                raw_plan,
+                definitions,
+                state["quiz_count_default"],
+            )
+        except ValueError as first_error:
+            repaired_output = self._llm_provider.generate(
+                build_repair_prompt(prompt, raw_plan, str(first_error))
+            )
+            try:
+                actions, message = parse_study_plan(
+                    repaired_output,
+                    definitions,
+                    state["quiz_count_default"],
+                )
+            except ValueError as second_error:
+                return _invalid_plan_state(second_error)
+
+        definitions_by_name = {
+            definition.task.value: definition for definition in definitions
+        }
+        plan = [
+            StudyAgentPlanStep(
+                task=StudyTask(action["tool_name"]),
+                description=definitions_by_name[action["tool_name"]].description,
+            )
+            for action in actions
+        ]
         return {
             "actions": actions,
-            "plan": [
-                {
-                    "tool_name": action["tool_name"],
-                    "description": action["description"],
-                }
-                for action in actions
-            ],
+            "plan": plan,
             "action_index": 0,
+            "message": message,
         }
+
+    @staticmethod
+    def _after_plan(state: AgentState) -> str:
+        if state.get("actions"):
+            return "execute_action"
+        return "finalize"
 
     def _execute_action(self, state: AgentState) -> AgentState:
         actions = state.get("actions", [])
         index = state.get("action_index", 0)
         if index >= len(actions):
             return {}
+
         action = actions[index]
-        completed = list(state.get("completed_tools", []))
-        citations = list(state.get("citations", []))
-        summaries = list(state.get("summaries", []))
-        quiz = list(state.get("quiz", []))
+        task = StudyTask(action["tool_name"])
+        arguments = dict(action["arguments"])
+        arguments["document_id"] = state["document_id"]
+        results = list(state.get("results", []))
+        notices = list(state.get("notices", []))
         errors = list(state.get("errors", []))
         try:
-            result = self._tool_executor.execute(
-                action["tool_name"], action["arguments"]
-            )
-            completed.append(action["tool_name"])
-            _collect_result(result, citations, summaries, quiz)
+            payload = self._tool_executor.execute(task.value, arguments)
+            results.append(task_result(task, payload))
+            notice = payload.get("notice")
+            if isinstance(notice, str) and notice and notice not in notices:
+                notices.append(notice)
         except (RuntimeError, ValueError) as error:
-            errors.append(f"{action['tool_name']}: {error}")
+            errors.append(StudyAgentTaskError(task=task, message=str(error)))
         return {
             "action_index": index + 1,
-            "completed_tools": completed,
-            "citations": citations,
-            "summaries": summaries,
-            "quiz": quiz,
+            "results": results,
+            "notices": notices,
             "errors": errors,
         }
 
-    def _next_step(self, state: AgentState) -> str:
+    @staticmethod
+    def _after_execution(state: AgentState) -> str:
         if state.get("action_index", 0) < len(state.get("actions", [])):
             return "execute_action"
         return "finalize"
 
-    def _finalize(self, state: AgentState) -> AgentState:
-        summaries = state.get("summaries", [])
-        summary = "\n\n".join(summaries)
-        recommendations = [
-            (
-                "Review the summary, then answer the quiz questions without "
-                "looking at the answers."
-            ),
-            "Use the cited pages to revisit concepts you cannot explain confidently.",
-        ]
-        if len(state.get("document_ids", [])) >= 2:
-            recommendations.append(
-                "Pay special attention to the similarities and differences "
-                "between the documents."
-            )
-        if state.get("errors"):
-            recommendations.append(
-                "Some optional study steps were unavailable; run them again "
-                "after checking local model readiness."
-            )
-        return {"summary": summary, "recommendations": recommendations}
+    @staticmethod
+    def _finalize(state: AgentState) -> AgentState:
+        return {}
 
 
-def _initial_state(state: Mapping[str, object]) -> AgentState:
-    goal = state.get("goal")
-    document_ids = state.get("document_ids")
-    question_count = state.get("question_count", 5)
-    if not isinstance(goal, str) or not goal.strip():
-        raise ValueError("Graph state requires a non-blank 'goal'.")
-    if (
-        not isinstance(document_ids, list)
-        or not document_ids
-        or not all(isinstance(item, str) and item for item in document_ids)
-    ):
-        raise ValueError("Graph state requires a non-empty list of document IDs.")
-    if not isinstance(question_count, int) or question_count < 1:
-        raise ValueError("Graph state requires a positive 'question_count'.")
-    session_id = state.get("session_id")
-    if session_id is not None and not isinstance(session_id, str):
-        raise ValueError("Graph state 'session_id' must be text or null.")
+def _initial_state(request: AskStudyAgentRequest) -> AgentState:
     return {
-        "goal": goal.strip(),
-        "document_ids": document_ids,
-        "question_count": question_count,
-        "session_id": session_id,
-        "completed_tools": [],
-        "citations": [],
-        "summaries": [],
-        "quiz": [],
+        "prompt": request.prompt,
+        "document_id": request.document_id.value,
+        "quiz_count_default": request.quiz_count_default,
+        "actions": [],
+        "action_index": 0,
+        "plan": [],
+        "results": [],
+        "notices": [],
         "errors": [],
+        "message": None,
+        "planning_error": None,
     }
 
 
-def _collect_result(
-    result: Mapping[str, object],
-    citations: list[dict[str, object]],
-    summaries: list[str],
-    quiz: list[dict[str, str]],
-) -> None:
-    raw_chunks = result.get("chunks", [])
-    if isinstance(raw_chunks, list):
-        for chunk in raw_chunks:
-            if isinstance(chunk, Mapping):
-                candidate = dict(chunk)
-                candidate.setdefault("section", None)
-                if candidate not in citations:
-                    citations.append(candidate)
-    raw_summary = result.get("summary")
-    if isinstance(raw_summary, str) and raw_summary:
-        summaries.append(raw_summary)
-    raw_questions = result.get("questions", [])
-    if isinstance(raw_questions, list):
-        for question in raw_questions:
-            if isinstance(question, Mapping):
-                prompt = question.get("prompt")
-                answer = question.get("answer")
-                if isinstance(prompt, str) and isinstance(answer, str):
-                    quiz.append({"prompt": prompt, "answer": answer})
+def _invalid_plan_state(error: ValueError) -> AgentState:
+    return {
+        "planning_error": (
+            "The local model returned an invalid study plan after one repair "
+            f"attempt: {error}"
+        ),
+        "message": "The study agent could not safely choose a supported task.",
+    }
 
 
-def _requests_flashcards(goal: str) -> bool:
-    words = {"flashcard", "flashcards", "memorize", "memorisation", "memory"}
-    return any(word in goal.lower() for word in words)
+def _agent_result(state: AgentState) -> AskStudyAgentResult:
+    results = tuple(state.get("results", []))
+    errors = tuple(state.get("errors", []))
+    planning_error = state.get("planning_error")
+    message: str | None
+    if planning_error is not None:
+        status = StudyAgentStatus.FAILED
+        message = planning_error
+    elif results and errors:
+        status = StudyAgentStatus.PARTIAL
+        message = state.get("message")
+    elif errors:
+        status = StudyAgentStatus.FAILED
+        message = state.get("message")
+    elif results:
+        status = StudyAgentStatus.COMPLETED
+        message = state.get("message")
+    else:
+        status = StudyAgentStatus.NEEDS_CLARIFICATION
+        message = state.get("message")
+    return AskStudyAgentResult(
+        status=status,
+        plan=tuple(state.get("plan", [])),
+        results=results,
+        notices=tuple(state.get("notices", [])),
+        errors=errors,
+        message=message,
+    )

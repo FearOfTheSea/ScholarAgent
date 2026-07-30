@@ -6,19 +6,20 @@ from pathlib import Path
 
 import streamlit as st
 
-from scholar_agent.application.dtos.agent import PrepareStudySessionRequest
+from scholar_agent.application.dtos.agent import (
+    AskStudyAgentRequest,
+    AskStudyAgentResult,
+    StudyAgentAnswerResult,
+    StudyAgentFlashcardsResult,
+    StudyAgentQuizResult,
+    StudyAgentSummaryResult,
+    StudyAgentTaskResult,
+)
 from scholar_agent.application.dtos.documents import (
     DeleteDocumentRequest,
     IngestDocumentRequest,
 )
 from scholar_agent.application.dtos.retrieval import RetrievedChunk
-from scholar_agent.application.dtos.study_requests import (
-    AnswerQuestionRequest,
-    CompareDocumentsRequest,
-    GenerateFlashcardsRequest,
-    GenerateQuizRequest,
-    SummarizeDocumentRequest,
-)
 from scholar_agent.config.settings import Settings
 from scholar_agent.domain.entities.document import Document
 from scholar_agent.infrastructure.di.container import Container, build_container
@@ -45,34 +46,13 @@ def main() -> None:
             st.success("Local model ready")
         else:
             st.warning("Local model unavailable")
-        page = st.radio(
-            "Study tools",
-            (
-                "Library",
-                "Study Agent",
-                "Ask",
-                "Summary",
-                "Quiz",
-                "Flashcards",
-                "Compare",
-            ),
-        )
+        page = st.radio("Navigation", ("Library", "Ask Study Agent"))
 
     st.title("ScholarAgent")
     if page == "Library":
         _render_library(container, documents)
-    elif page == "Study Agent":
-        _render_study_agent(container, documents)
-    elif page == "Ask":
-        _render_question_answering(container, documents)
-    elif page == "Summary":
-        _render_summary(container, documents)
-    elif page == "Quiz":
-        _render_quiz(container, documents)
-    elif page == "Flashcards":
-        _render_flashcards(container, documents)
     else:
-        _render_comparison(container, documents)
+        _render_ask_study_agent(container, documents)
 
 
 def run() -> None:
@@ -116,162 +96,72 @@ def _render_library(container: Container, documents: tuple[Document, ...]) -> No
             st.rerun()
 
 
-def _render_question_answering(
-    container: Container, documents: tuple[Document, ...]
+def _render_ask_study_agent(
+    container: Container,
+    documents: tuple[Document, ...],
 ) -> None:
-    st.subheader("Ask your PDFs")
-    if not _require_documents(documents):
+    st.subheader("Ask Study Agent")
+    document = _select_document(documents, "Study this document")
+    if document is None:
         return
-    selected_documents = st.multiselect(
-        "Search these documents",
-        documents,
-        default=list(documents),
-        format_func=_document_label,
+    prompt = st.text_area(
+        "What would you like to do?",
+        placeholder=(
+            "Ask a question, request a summary, create a quiz or flashcards, "
+            "or describe a broader study goal."
+        ),
     )
-    question = st.text_area("Question")
-    if st.button("Answer"):
+    if st.button("Ask Study Agent"):
         try:
-            with st.spinner("Searching local sources and generating an answer..."):
-                result = container.answer_question_use_case().execute(
-                    AnswerQuestionRequest(
-                        question=question,
-                        document_ids=tuple(
-                            document.identifier for document in selected_documents
-                        ),
-                    ),
+            with st.spinner("Choosing and running the right study tools..."):
+                result = container.ask_study_agent_use_case().execute(
+                    AskStudyAgentRequest(
+                        prompt=prompt,
+                        document_id=document.identifier,
+                    )
                 )
-            st.write(result.answer)
-            _render_citations(result.citations)
+            _render_agent_response(result)
         except (RuntimeError, ValueError) as error:
             st.error(str(error))
 
 
-def _render_study_agent(container: Container, documents: tuple[Document, ...]) -> None:
-    st.subheader("Exam preparation agent")
-    if not _require_documents(documents):
-        return
-    selected_documents = st.multiselect(
-        "Study these documents",
-        documents,
-        default=list(documents),
-        format_func=_document_label,
-    )
-    goal = st.text_area(
-        "Study goal",
-        value="Prepare me for an exam on the most important concepts.",
-    )
-    question_count = st.slider("Quiz questions", min_value=1, max_value=10, value=5)
-    if st.button("Run study agent"):
-        if not selected_documents:
-            st.error("Select at least one document.")
-            return
-        try:
-            with st.spinner("Planning a study session and running local tools..."):
-                result = container.prepare_study_session_use_case().execute(
-                    PrepareStudySessionRequest(
-                        goal=goal,
-                        document_ids=tuple(
-                            document.identifier for document in selected_documents
-                        ),
-                        question_count=question_count,
-                    ),
-                )
-            st.markdown("### Agent plan")
-            for index, step in enumerate(result.plan, start=1):
-                st.write(f"{index}. **{step.tool_name}** — {step.description}")
-            st.markdown("### Study summary")
-            st.write(result.summary or "No summary was produced.")
-            st.markdown("### Quiz")
-            for index, question in enumerate(result.quiz, start=1):
-                with st.expander(f"Question {index}: {question.prompt}"):
-                    st.write(question.answer)
-            st.markdown("### Recommendations")
-            for recommendation in result.recommendations:
-                st.write(f"- {recommendation}")
-            _render_citations(result.citations)
-            if result.errors:
-                st.warning("Some optional steps were unavailable:")
-                for error in result.errors:
-                    st.write(f"- {error}")
-        except (RuntimeError, ValueError) as error:
-            st.error(str(error))
+def _render_agent_response(result: AskStudyAgentResult) -> None:
+    if result.plan:
+        selected_tasks = ", ".join(
+            step.task.value.replace("_", " ").title() for step in result.plan
+        )
+        st.caption(f"Agent selected: {selected_tasks}")
+    if result.message:
+        st.info(result.message)
+    for notice in result.notices:
+        st.info(notice)
+    for task_result in result.results:
+        _render_task_result(task_result)
+    if result.errors:
+        st.warning("Some selected tasks could not be completed:")
+        for error in result.errors:
+            task_name = error.task.value.replace("_", " ").title()
+            st.write(f"- **{task_name}:** {error.message}")
 
 
-def _render_summary(container: Container, documents: tuple[Document, ...]) -> None:
-    st.subheader("Summarize a PDF")
-    document = _select_document(documents, "Document to summarize")
-    if document is not None and st.button("Generate summary"):
-        try:
-            with st.spinner("Generating a local hierarchical summary..."):
-                result = container.summarize_document_use_case().execute(
-                    SummarizeDocumentRequest(document.identifier),
-                )
-            st.write(result.summary)
-        except (RuntimeError, ValueError) as error:
-            st.error(str(error))
-
-
-def _render_quiz(container: Container, documents: tuple[Document, ...]) -> None:
-    st.subheader("Generate a quiz")
-    document = _select_document(documents, "Document for the quiz")
-    question_count = st.slider("Questions", min_value=1, max_value=10, value=5)
-    if document is not None and st.button("Generate quiz"):
-        try:
-            with st.spinner("Generating structured questions locally..."):
-                result = container.generate_quiz_use_case().execute(
-                    GenerateQuizRequest(document.identifier, question_count),
-                )
-            for index, question in enumerate(result.questions, start=1):
-                with st.expander(f"Question {index}: {question.prompt}"):
-                    st.write(question.answer)
-        except (RuntimeError, ValueError) as error:
-            st.error(str(error))
-
-
-def _render_flashcards(container: Container, documents: tuple[Document, ...]) -> None:
-    st.subheader("Generate flashcards")
-    document = _select_document(documents, "Document for flashcards")
-    card_count = st.slider("Cards", min_value=1, max_value=20, value=10)
-    if document is not None and st.button("Generate flashcards"):
-        try:
-            with st.spinner("Generating structured flashcards locally..."):
-                result = container.generate_flashcards_use_case().execute(
-                    GenerateFlashcardsRequest(document.identifier, card_count),
-                )
-            for card in result.cards:
-                with st.expander(card.front):
-                    st.write(card.back)
-        except (RuntimeError, ValueError) as error:
-            st.error(str(error))
-
-
-def _render_comparison(container: Container, documents: tuple[Document, ...]) -> None:
-    st.subheader("Compare two PDFs")
-    if len(documents) < 2:
-        st.info("Add at least two PDFs to compare them.")
-        return
-    first_document = st.selectbox(
-        "First document", documents, format_func=_document_label
-    )
-    second_document = st.selectbox(
-        "Second document",
-        documents,
-        index=1,
-        format_func=_document_label,
-    )
-    if st.button("Compare"):
-        try:
-            with st.spinner("Retrieving local evidence for both documents..."):
-                result = container.compare_documents_use_case().execute(
-                    CompareDocumentsRequest(
-                        first_document_id=first_document.identifier,
-                        second_document_id=second_document.identifier,
-                    ),
-                )
-            st.write(result.comparison)
-            _render_citations(result.citations)
-        except (RuntimeError, ValueError) as error:
-            st.error(str(error))
+def _render_task_result(result: StudyAgentTaskResult) -> None:
+    if isinstance(result, StudyAgentAnswerResult):
+        st.markdown("### Answer")
+        st.write(result.answer)
+        _render_citations(result.citations)
+    elif isinstance(result, StudyAgentSummaryResult):
+        st.markdown("### Summary")
+        st.write(result.summary)
+    elif isinstance(result, StudyAgentQuizResult):
+        st.markdown("### Quiz")
+        for index, question in enumerate(result.questions, start=1):
+            with st.expander(f"Question {index}: {question.prompt}"):
+                st.write(question.answer)
+    elif isinstance(result, StudyAgentFlashcardsResult):
+        st.markdown("### Flashcards")
+        for card in result.cards:
+            with st.expander(card.front):
+                st.write(card.back)
 
 
 def _select_document(

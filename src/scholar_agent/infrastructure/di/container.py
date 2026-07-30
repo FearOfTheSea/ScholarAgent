@@ -2,15 +2,16 @@
 
 from dependency_injector import containers, providers
 
+from scholar_agent.application.services.generation_count_policy import (
+    GenerationCountPolicy,
+)
 from scholar_agent.application.services.request_validation_service import (
     RequestValidationService,
 )
 from scholar_agent.application.use_cases.answer_question import AnswerQuestionUseCase
+from scholar_agent.application.use_cases.ask_study_agent import AskStudyAgentUseCase
 from scholar_agent.application.use_cases.check_runtime_readiness import (
     CheckRuntimeReadinessUseCase,
-)
-from scholar_agent.application.use_cases.compare_documents import (
-    CompareDocumentsUseCase,
 )
 from scholar_agent.application.use_cases.delete_document import DeleteDocumentUseCase
 from scholar_agent.application.use_cases.generate_flashcards import (
@@ -19,9 +20,6 @@ from scholar_agent.application.use_cases.generate_flashcards import (
 from scholar_agent.application.use_cases.generate_quiz import GenerateQuizUseCase
 from scholar_agent.application.use_cases.ingest_document import IngestDocumentUseCase
 from scholar_agent.application.use_cases.list_documents import ListDocumentsUseCase
-from scholar_agent.application.use_cases.prepare_study_session import (
-    PrepareStudySessionUseCase,
-)
 from scholar_agent.application.use_cases.summarize_document import (
     SummarizeDocumentUseCase,
 )
@@ -50,10 +48,9 @@ from scholar_agent.infrastructure.adapters.sentence_transformer_embedding import
 from scholar_agent.infrastructure.adapters.sqlite_document_repository import (
     SQLiteDocumentRepository,
 )
+from scholar_agent.infrastructure.tools.answer_question_tool import AnswerQuestionTool
+from scholar_agent.infrastructure.tools.capabilities import STUDY_CAPABILITIES
 from scholar_agent.infrastructure.tools.citation_lookup_tool import CitationLookupTool
-from scholar_agent.infrastructure.tools.compare_documents_tool import (
-    CompareDocumentsTool,
-)
 from scholar_agent.infrastructure.tools.generate_flashcards_tool import (
     GenerateFlashcardsTool,
 )
@@ -71,6 +68,7 @@ class Container(containers.DeclarativeContainer):
     config = providers.Configuration()
 
     validation_service = providers.Singleton(RequestValidationService)
+    generation_count_policy = providers.Singleton(GenerationCountPolicy)
     llm_provider = providers.Selector(
         config.llm_provider_type,
         ollama=providers.Singleton(
@@ -153,32 +151,27 @@ class Container(containers.DeclarativeContainer):
         llm_provider=llm_provider,
         vector_store=vector_store,
     )
-    compare_documents_use_case = providers.Factory(
-        CompareDocumentsUseCase,
-        llm_provider=llm_provider,
-        retriever=retriever,
-    )
     generate_quiz_use_case = providers.Factory(
         GenerateQuizUseCase,
         llm_provider=llm_provider,
         vector_store=vector_store,
-        validation_service=validation_service,
+        count_policy=generation_count_policy,
     )
     generate_flashcards_use_case = providers.Factory(
         GenerateFlashcardsUseCase,
         llm_provider=llm_provider,
         vector_store=vector_store,
-        validation_service=validation_service,
+        count_policy=generation_count_policy,
     )
 
     semantic_search_tool = providers.Factory(SemanticSearchTool, retriever=retriever)
+    answer_question_tool = providers.Factory(
+        AnswerQuestionTool,
+        use_case=answer_question_use_case,
+    )
     summarize_document_tool = providers.Factory(
         SummarizeDocumentTool,
         use_case=summarize_document_use_case,
-    )
-    compare_documents_tool = providers.Factory(
-        CompareDocumentsTool,
-        use_case=compare_documents_use_case,
     )
     generate_quiz_tool = providers.Factory(
         GenerateQuizTool,
@@ -196,20 +189,22 @@ class Container(containers.DeclarativeContainer):
         StudyToolExecutor,
         tools=providers.Dict(
             semantic_search=semantic_search_tool,
+            answer_question=answer_question_tool,
             summarize_document=summarize_document_tool,
-            compare_documents=compare_documents_tool,
             generate_quiz=generate_quiz_tool,
             generate_flashcards=generate_flashcards_tool,
             citation_lookup=citation_lookup_tool,
         ),
+        capabilities=providers.Object(STUDY_CAPABILITIES),
     )
     graph_runner = providers.Singleton(LangGraphRunner, tool_executor=tool_executor)
     agent_runner = providers.Singleton(
         LangGraphAgentRunner,
         tool_executor=tool_executor,
+        llm_provider=llm_provider,
     )
-    prepare_study_session_use_case = providers.Factory(
-        PrepareStudySessionUseCase,
+    ask_study_agent_use_case = providers.Factory(
+        AskStudyAgentUseCase,
         agent_runner=agent_runner,
         validation_service=validation_service,
     )

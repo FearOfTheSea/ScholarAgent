@@ -1,4 +1,4 @@
-"""Results produced by study-assistance use cases."""
+"""Results produced by direct study-assistance use cases."""
 
 from dataclasses import dataclass
 
@@ -21,14 +21,6 @@ class SummarizeDocumentResult:
 
 
 @dataclass(frozen=True, slots=True)
-class CompareDocumentsResult:
-    """A comparison of two documents."""
-
-    comparison: str
-    citations: tuple[RetrievedChunk, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class QuizQuestion:
     """A quiz question and its answer."""
 
@@ -38,9 +30,13 @@ class QuizQuestion:
 
 @dataclass(frozen=True, slots=True)
 class GenerateQuizResult:
-    """A generated quiz."""
+    """A generated quiz and the count policy applied to it."""
 
     questions: tuple[QuizQuestion, ...]
+    requested_count: int
+    effective_count: int
+    maximum_count: int
+    notice: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,6 +49,10 @@ class Flashcard:
 
 @dataclass(frozen=True, slots=True)
 class GenerateFlashcardsResult:
-    """A generated flashcard set."""
+    """Generated flashcards and the count policy applied to them."""
 
     cards: tuple[Flashcard, ...]
+    requested_count: int
+    effective_count: int
+    maximum_count: int
+    notice: str | None = None

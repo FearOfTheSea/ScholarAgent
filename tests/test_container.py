@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from scholar_agent.application.dtos.agent import StudyTask
+from scholar_agent.application.use_cases.ask_study_agent import AskStudyAgentUseCase
 from scholar_agent.config.settings import Settings
 from scholar_agent.infrastructure.adapters import (
     FAISSRepository,
@@ -17,6 +19,7 @@ from scholar_agent.infrastructure.adapters import (
 )
 from scholar_agent.infrastructure.di import build_container
 from scholar_agent.infrastructure.tools import StudyToolExecutor
+from scholar_agent.infrastructure.tools.answer_question_tool import AnswerQuestionTool
 
 
 def test_container_registers_every_output_port_implementation(tmp_path: Path) -> None:
@@ -40,3 +43,11 @@ def test_container_registers_every_output_port_implementation(tmp_path: Path) ->
     assert isinstance(container.memory_store(), InMemoryStore)
     assert isinstance(container.graph_runner(), LangGraphRunner)
     assert isinstance(container.tool_executor(), StudyToolExecutor)
+    assert isinstance(container.answer_question_tool(), AnswerQuestionTool)
+    assert isinstance(container.ask_study_agent_use_case(), AskStudyAgentUseCase)
+    assert [item.task for item in container.tool_executor().capabilities()] == [
+        StudyTask.ANSWER_QUESTION,
+        StudyTask.SUMMARIZE_DOCUMENT,
+        StudyTask.GENERATE_QUIZ,
+        StudyTask.GENERATE_FLASHCARDS,
+    ]

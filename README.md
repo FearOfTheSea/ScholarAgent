@@ -16,10 +16,9 @@ use can continue offline once those files are cached.
   catalog metadata, and a normalized FAISS index
 - Grounded question answering with document, page, chunk, and similarity-score
   citations
-- Hierarchical document summaries, structured quizzes, flashcards, and
-  evidence-preserving two-document comparisons
+- Hierarchical document summaries, structured quizzes, and flashcards
 - A local FastAPI API and Streamlit interface
-- A goal-oriented exam preparation agent that plans and runs several study tools
+- A unified study agent that selects one or more constrained study use cases
 - Dependency injection that keeps Ollama, FAISS, PyMuPDF, LangChain, and
   LangGraph behind application output ports
 
@@ -105,11 +104,12 @@ All values are environment variables and have matching entries in
 | `POST` | `/documents` | Upload, retain, and index one PDF (multipart field: `file`) |
 | `GET` | `/documents` | List locally indexed documents |
 | `DELETE` | `/documents/{document_id}` | Remove the retained PDF, catalog record, chunks, and vectors |
-| `POST` | `/questions` | Ask a cited question over selected documents |
+| `POST` | `/agent/requests` | Route one free-form, single-PDF study request |
+| `POST` | `/agent/study` | Deprecated compatibility route for the study agent |
+| `POST` | `/questions` | Ask a cited question over one selected document |
 | `POST` | `/documents/{document_id}/summary` | Create a local hierarchical summary |
 | `POST` | `/documents/{document_id}/quiz` | Create validated quiz questions |
 | `POST` | `/documents/{document_id}/flashcards` | Create validated flashcards |
-| `POST` | `/comparisons` | Compare two documents with evidence from each |
 
 Interactive API documentation is available at
 `http://127.0.0.1:8000/docs` while the API is running.
@@ -165,9 +165,11 @@ layout.
 
 ## Agent demonstration
 
-The `POST /agent/study` endpoint and the **Study Agent** Streamlit page accept a
-goal such as “Prepare me for an exam using these lecture PDFs.” The LangGraph
-workflow plans an evidence search, document summaries, an optional comparison,
-and a structured quiz, then returns recommendations and source citations. The
-planner is constrained to the local study tools and preserves partial results
-when an optional step is unavailable.
+The `POST /agent/requests` endpoint and **Ask Study Agent** Streamlit page accept
+one PDF and a request such as “Explain gradient descent,” “Create 50 quiz
+questions,” or “Prepare me for an exam.” A constrained local-LLM planner may
+select question answering, summarization, quiz generation, flashcard generation,
+or a useful combination. The complete plan is validated before execution, each
+capability can run at most once, and partial results survive independent runtime
+failures. Quiz requests are internally capped at 10 and flashcard requests at
+20; the response explains when a requested count was reduced.

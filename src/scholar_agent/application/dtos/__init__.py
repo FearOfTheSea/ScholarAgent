@@ -15,14 +15,12 @@ from scholar_agent.application.dtos.retrieval import (
 from scholar_agent.application.dtos.runtime import RuntimeReadinessResult
 from scholar_agent.application.dtos.study_requests import (
     AnswerQuestionRequest,
-    CompareDocumentsRequest,
     GenerateFlashcardsRequest,
     GenerateQuizRequest,
     SummarizeDocumentRequest,
 )
 from scholar_agent.application.dtos.study_results import (
     AnswerQuestionResult,
-    CompareDocumentsResult,
     Flashcard,
     GenerateFlashcardsResult,
     GenerateQuizResult,
@@ -33,8 +31,6 @@ from scholar_agent.application.dtos.study_results import (
 __all__ = [
     "AnswerQuestionRequest",
     "AnswerQuestionResult",
-    "CompareDocumentsRequest",
-    "CompareDocumentsResult",
     "DeleteDocumentRequest",
     "DeleteDocumentResult",
     "DocumentChunk",

@@ -58,7 +58,7 @@ flowchart LR
     vectors --> retriever
     metadata --> retriever
     retriever --> evidence["Cited source chunks"]
-    evidence --> use_case["Answer, summary, quiz, flashcards, or comparison use case"]
+    evidence --> use_case["Answer, summary, quiz, or flashcards use case"]
     use_case --> ollama["Local Ollama\nqwen3:1.7b"]
 ```
 
@@ -86,43 +86,44 @@ only on the local machine.
 
 ## Direct study use cases
 
-The API and Streamlit pages call direct use cases rather than an agent:
+Direct API endpoints and structured agent tools delegate to the same application
+use cases:
 
 - `AnswerQuestionUseCase` retrieves relevant chunks and returns an answer with
   citations, or states that selected material does not support a claim.
 - `SummarizeDocumentUseCase` produces a hierarchical summary when a document
   is larger than the local context budget.
 - `GenerateQuizUseCase` and `GenerateFlashcardsUseCase` require typed,
-  validated structured output.
-- `CompareDocumentsUseCase` retrieves evidence from each document separately
-  and keeps citations for both sides.
+  validated structured output and apply the internal 10-question and
+  20-flashcard limits.
 
 ## Optional graph orchestration
 
 `LangGraphRunner` is intentionally a one-node, thin executor. It accepts an
 explicit tool name and arguments, then delegates to `IToolExecutor`. The
-available local tools are semantic search, summary, comparison, quiz,
-flashcards, and citation lookup. It is not responsible for answer generation,
-business rules, or hidden routing and is not required by the HTTP or Streamlit
-flows.
+available local tools include semantic search, question answering, summary,
+quiz, flashcards, and citation lookup. It is not responsible for business rules
+or arbitrary execution.
 
-## Goal-oriented study agent
+## Unified study agent
 
-The `/agent/study` endpoint and the Streamlit Study Agent page use
-`PrepareStudySessionUseCase` and `LangGraphAgentRunner`. A constrained planner
-creates a tool sequence from the study goal and selected documents:
+The `/agent/requests` endpoint and Streamlit **Ask Study Agent** page use
+`AskStudyAgentUseCase` and `LangGraphAgentRunner`. Every request selects exactly
+one document. The local LLM proposes one or more actions from an explicit
+capability catalog:
 
 ```mermaid
 flowchart TB
-    goal[Study goal] --> planner[Constrained planner]
-    planner --> search[Semantic search]
-    search --> summaries[Document summaries]
-    summaries --> compare[Optional comparison]
-    compare --> quiz[Structured quiz]
-    quiz --> finalize[Recommendations and citations]
+    request["Prompt and one document"] --> planner["Constrained JSON planner"]
+    planner --> validate["Validate every action"]
+    validate --> execute["Execute registered use cases in order"]
+    execute --> collect["Collect typed results, notices, citations, and errors"]
 ```
 
-The graph state records the goal, planned actions, completed tools, retrieved
-citations, summaries, quiz questions, and errors. It only invokes the approved
-study tools through `IToolExecutor`; it cannot invent tools or execute arbitrary
-code. Tool failures are recorded so completed work can still be returned.
+The planner can select question answering, summarization, quiz generation, and
+flashcard generation. It may infer a bundle for a broad study goal, but each
+capability can appear only once. Document IDs are injected after validation and
+never model-generated. Duplicate, unknown, malformed, comparison, and
+multi-document actions execute nothing. One repair attempt is allowed for
+malformed planner output. Runtime failures are isolated so later independent
+tasks can still complete.

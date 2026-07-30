@@ -9,7 +9,9 @@ def parse_items(
     start_index = raw_output.find("[")
     end_index = raw_output.rfind("]")
     if start_index == -1 or end_index == -1 or end_index < start_index:
-        normalized_output = raw_output.strip().removeprefix("```json").removeprefix("```")
+        normalized_output = (
+            raw_output.strip().removeprefix("```json").removeprefix("```")
+        )
         normalized_output = normalized_output.removesuffix("```").strip()
     else:
         normalized_output = raw_output[start_index : end_index + 1]

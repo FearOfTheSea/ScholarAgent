@@ -1,4 +1,4 @@
-"""Requests accepted by study-assistance use cases."""
+"""Requests accepted by direct study-assistance use cases."""
 
 from dataclasses import dataclass
 
@@ -7,10 +7,10 @@ from scholar_agent.domain.value_objects.document_id import DocumentId
 
 @dataclass(frozen=True, slots=True)
 class AnswerQuestionRequest:
-    """Request to answer a question using selected documents."""
+    """Request to answer a question using one selected document."""
 
     question: str
-    document_ids: tuple[DocumentId, ...] = ()
+    document_id: DocumentId
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,14 +18,6 @@ class SummarizeDocumentRequest:
     """Request to summarize one document."""
 
     document_id: DocumentId
-
-
-@dataclass(frozen=True, slots=True)
-class CompareDocumentsRequest:
-    """Request to compare two documents."""
-
-    first_document_id: DocumentId
-    second_document_id: DocumentId
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,9 +1,22 @@
 """HTTP request and response models."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+StudyTaskName = Literal[
+    "answer_question",
+    "summarize_document",
+    "generate_quiz",
+    "generate_flashcards",
+]
+StudyAgentStatusName = Literal[
+    "completed",
+    "needs_clarification",
+    "partial",
+    "failed",
+]
 
 
 class HealthResponse(BaseModel):
@@ -43,10 +56,10 @@ class CitationResponse(BaseModel):
 
 
 class AnswerQuestionRequestModel(BaseModel):
-    """Request body for a grounded document question."""
+    """Request body for a grounded, single-document question."""
 
     question: str
-    document_ids: list[str] = []
+    document_id: str
 
 
 class AnswerQuestionResponse(BaseModel):
@@ -70,9 +83,14 @@ class QuizQuestionResponse(BaseModel):
 
 
 class GenerateQuizResponse(BaseModel):
-    """Generated quiz response."""
+    """Generated quiz response with applied count policy."""
 
     questions: list[QuizQuestionResponse]
+    requested_count: int
+    effective_count: int
+    generated_count: int
+    maximum_count: int
+    notice: str | None = None
 
 
 class GenerateFlashcardsRequestModel(BaseModel):
@@ -89,9 +107,14 @@ class FlashcardResponse(BaseModel):
 
 
 class GenerateFlashcardsResponse(BaseModel):
-    """Generated flashcard response."""
+    """Generated flashcard response with applied count policy."""
 
     cards: list[FlashcardResponse]
+    requested_count: int
+    effective_count: int
+    generated_count: int
+    maximum_count: int
+    notice: str | None = None
 
 
 class SummarizeDocumentResponse(BaseModel):
@@ -100,22 +123,86 @@ class SummarizeDocumentResponse(BaseModel):
     summary: str
 
 
-class CompareDocumentsRequestModel(BaseModel):
-    """Selected documents for a grounded comparison."""
+class AskStudyAgentRequestModel(BaseModel):
+    """A free-form request grounded in one selected document."""
 
-    first_document_id: str
-    second_document_id: str
+    prompt: str
+    document_id: str
 
 
-class CompareDocumentsResponse(BaseModel):
-    """Grounded comparison and citations."""
+class AgentPlanStepResponse(BaseModel):
+    """One validated action selected by the study agent."""
 
-    comparison: str
+    task: StudyTaskName
+    description: str
+
+
+class AgentAnswerResultResponse(BaseModel):
+    """A grounded answer selected by the study agent."""
+
+    task: Literal["answer_question"]
+    answer: str
     citations: list[CitationResponse]
 
 
+class AgentSummaryResultResponse(BaseModel):
+    """A summary selected by the study agent."""
+
+    task: Literal["summarize_document"]
+    summary: str
+
+
+class AgentQuizResultResponse(BaseModel):
+    """A quiz selected by the study agent."""
+
+    task: Literal["generate_quiz"]
+    questions: list[QuizQuestionResponse]
+    requested_count: int
+    effective_count: int
+    generated_count: int
+    maximum_count: int
+
+
+class AgentFlashcardsResultResponse(BaseModel):
+    """Flashcards selected by the study agent."""
+
+    task: Literal["generate_flashcards"]
+    cards: list[FlashcardResponse]
+    requested_count: int
+    effective_count: int
+    generated_count: int
+    maximum_count: int
+
+
+AgentResultResponse = Annotated[
+    AgentAnswerResultResponse
+    | AgentSummaryResultResponse
+    | AgentQuizResultResponse
+    | AgentFlashcardsResultResponse,
+    Field(discriminator="task"),
+]
+
+
+class AgentTaskErrorResponse(BaseModel):
+    """A failure isolated to one selected study task."""
+
+    task: StudyTaskName
+    message: str
+
+
+class AskStudyAgentResponse(BaseModel):
+    """Structured result of a unified study-agent request."""
+
+    status: StudyAgentStatusName
+    plan: list[AgentPlanStepResponse]
+    results: list[AgentResultResponse]
+    notices: list[str]
+    errors: list[AgentTaskErrorResponse]
+    message: str | None = None
+
+
 class PrepareStudySessionRequestModel(BaseModel):
-    """Goal and documents supplied to the study agent."""
+    """Legacy study-agent request retained during API migration."""
 
     goal: str
     document_ids: list[str]
@@ -123,27 +210,31 @@ class PrepareStudySessionRequestModel(BaseModel):
     session_id: str | None = None
 
 
-class AgentPlanStepResponse(BaseModel):
-    """One planned action returned by the study agent."""
+class LegacyAgentPlanStepResponse(BaseModel):
+    """One planned action in the legacy response shape."""
 
     tool_name: str
     description: str
 
 
 class AgentQuizQuestionResponse(BaseModel):
-    """One quiz question returned by the study agent."""
+    """One quiz question in the legacy response shape."""
 
     prompt: str
     answer: str
 
 
 class PrepareStudySessionResponse(BaseModel):
-    """Structured study-agent result."""
+    """Legacy response enriched with the unified typed results."""
 
-    plan: list[AgentPlanStepResponse]
+    plan: list[LegacyAgentPlanStepResponse]
     summary: str
     quiz: list[AgentQuizQuestionResponse]
     recommendations: list[str]
     completed_tools: list[str]
     citations: list[CitationResponse]
     errors: list[str]
+    results: list[AgentResultResponse]
+    notices: list[str]
+    status: StudyAgentStatusName
+    message: str | None = None

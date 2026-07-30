@@ -1,5 +1,5 @@
 # FastAPI adapter
 
-The API provides a health endpoint in Phase 1. Future endpoints will translate
-HTTP requests into application input-port calls.
-
+The FastAPI adapter exposes health, document lifecycle, direct study, and
+unified-agent endpoints. It validates HTTP shapes, delegates to application use
+cases, and serializes typed results without business logic.

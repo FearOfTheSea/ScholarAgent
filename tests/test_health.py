@@ -177,5 +177,8 @@ async def _post_question(app: FastAPI) -> Response:
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         return await client.post(
             "/questions",
-            json={"question": "What does the material say?"},
+            json={
+                "question": "What does the material say?",
+                "document_id": "document-1",
+            },
         )
