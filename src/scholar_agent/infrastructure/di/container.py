@@ -8,18 +8,32 @@ from scholar_agent.application.services.generation_count_policy import (
 from scholar_agent.application.services.request_validation_service import (
     RequestValidationService,
 )
+from scholar_agent.application.services.tutor_turn_service import TutorTurnService
 from scholar_agent.application.use_cases.answer_question import AnswerQuestionUseCase
 from scholar_agent.application.use_cases.ask_study_agent import AskStudyAgentUseCase
+from scholar_agent.application.use_cases.build_document_brief import (
+    BuildDocumentBriefUseCase,
+)
 from scholar_agent.application.use_cases.check_runtime_readiness import (
     CheckRuntimeReadinessUseCase,
 )
+from scholar_agent.application.use_cases.continue_study_session import (
+    ContinueStudySessionUseCase,
+)
 from scholar_agent.application.use_cases.delete_document import DeleteDocumentUseCase
+from scholar_agent.application.use_cases.delete_study_session import (
+    DeleteStudySessionUseCase,
+)
 from scholar_agent.application.use_cases.generate_flashcards import (
     GenerateFlashcardsUseCase,
 )
 from scholar_agent.application.use_cases.generate_quiz import GenerateQuizUseCase
+from scholar_agent.application.use_cases.get_study_session import GetStudySessionUseCase
 from scholar_agent.application.use_cases.ingest_document import IngestDocumentUseCase
 from scholar_agent.application.use_cases.list_documents import ListDocumentsUseCase
+from scholar_agent.application.use_cases.start_study_session import (
+    StartStudySessionUseCase,
+)
 from scholar_agent.application.use_cases.summarize_document import (
     SummarizeDocumentUseCase,
 )
@@ -34,6 +48,9 @@ from scholar_agent.infrastructure.adapters.langgraph_agent_runner import (
     LangGraphAgentRunner,
 )
 from scholar_agent.infrastructure.adapters.langgraph_runner import LangGraphRunner
+from scholar_agent.infrastructure.adapters.langgraph_tutor_runner import (
+    LangGraphTutorRunner,
+)
 from scholar_agent.infrastructure.adapters.local_document_library import (
     LocalDocumentLibrary,
 )
@@ -47,6 +64,9 @@ from scholar_agent.infrastructure.adapters.sentence_transformer_embedding import
 )
 from scholar_agent.infrastructure.adapters.sqlite_document_repository import (
     SQLiteDocumentRepository,
+)
+from scholar_agent.infrastructure.adapters.sqlite_study_session_repository import (
+    SQLiteStudySessionRepository,
 )
 from scholar_agent.infrastructure.tools.answer_question_tool import AnswerQuestionTool
 from scholar_agent.infrastructure.tools.capabilities import STUDY_CAPABILITIES
@@ -113,6 +133,10 @@ class Container(containers.DeclarativeContainer):
         SQLiteDocumentRepository,
         database_path=config.catalog_db_path,
     )
+    study_session_repository = providers.Singleton(
+        SQLiteStudySessionRepository,
+        database_path=config.catalog_db_path,
+    )
     memory_store = providers.Singleton(InMemoryStore)
 
     check_runtime_readiness_use_case = providers.Factory(
@@ -139,6 +163,7 @@ class Container(containers.DeclarativeContainer):
         document_repository=document_repository,
         document_library=document_library,
         vector_store=vector_store,
+        session_repository=study_session_repository,
     )
     answer_question_use_case = providers.Factory(
         AnswerQuestionUseCase,
@@ -207,6 +232,41 @@ class Container(containers.DeclarativeContainer):
         AskStudyAgentUseCase,
         agent_runner=agent_runner,
         validation_service=validation_service,
+    )
+    build_document_brief_use_case = providers.Factory(
+        BuildDocumentBriefUseCase,
+        llm_provider=llm_provider,
+        vector_store=vector_store,
+        session_repository=study_session_repository,
+    )
+    start_study_session_use_case = providers.Factory(
+        StartStudySessionUseCase,
+        brief_use_case=build_document_brief_use_case,
+        session_repository=study_session_repository,
+        validation_service=validation_service,
+    )
+    tutor_turn_service = providers.Factory(
+        TutorTurnService,
+        llm_provider=llm_provider,
+        retriever=retriever,
+        session_repository=study_session_repository,
+    )
+    tutor_runner = providers.Factory(
+        LangGraphTutorRunner,
+        turn_service=tutor_turn_service,
+    )
+    continue_study_session_use_case = providers.Factory(
+        ContinueStudySessionUseCase,
+        tutor_runner=tutor_runner,
+        validation_service=validation_service,
+    )
+    get_study_session_use_case = providers.Factory(
+        GetStudySessionUseCase,
+        session_repository=study_session_repository,
+    )
+    delete_study_session_use_case = providers.Factory(
+        DeleteStudySessionUseCase,
+        session_repository=study_session_repository,
     )
 
 

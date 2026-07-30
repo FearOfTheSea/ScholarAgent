@@ -1,20 +1,25 @@
-"""Pre-trains a miniature custom GPT model on a small sample corpus to demonstrate Chapters 2 and 5 concepts."""
+"""Pre-train a miniature custom GPT for the Chapters 2 and 5 demonstration."""
 
 import math
 from pathlib import Path
+
 import torch
 import torch.nn as nn
 from transformers import GPT2Tokenizer
-from scholar_agent.infrastructure.adapters.scratch_gpt.gpt_model import GPTModel
+
+from scholar_agent.infrastructure.adapters.scratch_gpt.gpt_model import (
+    GPTConfig,
+    GPTModel,
+)
 
 # 1. Prepare a tiny sample corpus
 CORPUS = """
 ScholarAgent is an educational study assistant that helps students.
-It is built with clean architecture, hexagonal boundaries, and ports and adapters.
-Clean architecture prioritizes readability, maintainability, and testability over features.
-LangChain and LangGraph are isolated behind output ports in the infrastructure layer.
-This ensures the domain and application layers remain independent of external frameworks.
-Local models run completely offline on your laptop using Ollama and FAISS repositories.
+It uses clean architecture, hexagonal boundaries, and ports and adapters.
+Clean architecture prioritizes readability, maintainability, and testability.
+LangChain and LangGraph stay behind output ports in the infrastructure layer.
+The domain and application layers remain independent of external frameworks.
+Local models run offline using Ollama and FAISS repositories.
 To study effectively, use study tools like flashcards, quizzes, and summaries.
 Students love clean software engineering design because it is elegant and simple.
 """
@@ -22,7 +27,7 @@ Students love clean software engineering design because it is elegant and simple
 
 def main() -> None:
     print("=== Build-a-LLM-from-Scratch: Mini Pre-training Demo ===")
-    
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using execution device: {device}\n")
 
@@ -45,7 +50,7 @@ def main() -> None:
     print(f"Generated {len(X)} training sequences of length {context_length}.")
 
     # 3. Instantiate miniature custom GPT model (Chapter 4 concepts)
-    mini_config = {
+    mini_config: GPTConfig = {
         "vocab_size": 50257,
         "context_length": context_length,
         "emb_dim": 128,
@@ -53,18 +58,23 @@ def main() -> None:
         "n_layers": 4,
         "bias": True,
     }
-    
+
     model = GPTModel(mini_config).to(device)
-    print(f"Initialized miniature GPTModel: {sum(p.numel() for p in model.parameters()):,} parameters.")
+    parameter_count = sum(parameter.numel() for parameter in model.parameters())
+    print(f"Initialized miniature GPTModel: {parameter_count:,} parameters.")
 
     # 4. Generate text before training to show baseline (Chapter 5)
     prompt = "ScholarAgent is"
-    prompt_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.long, device=device).unsqueeze(0)
-    
+    prompt_ids = torch.tensor(
+        tokenizer.encode(prompt), dtype=torch.long, device=device
+    ).unsqueeze(0)
+
     print("\n--- Text Generation BEFORE training ---")
     print(f"Prompt: '{prompt}'")
     with torch.no_grad():
-        generated_before = generate_text(model, prompt_ids, max_new_tokens=15, context_len=context_length)
+        generated_before = generate_text(
+            model, prompt_ids, max_new_tokens=15, context_len=context_length
+        )
     print(f"Output: '{tokenizer.decode(generated_before[0].tolist())}'")
 
     # 5. Training Loop (Chapter 5 concepts)
@@ -78,7 +88,7 @@ def main() -> None:
     for epoch in range(1, epochs + 1):
         epoch_loss = 0.0
         num_batches = math.ceil(len(X) / batch_size)
-        
+
         # Shuffle inputs each epoch
         indices = torch.randperm(len(X))
         X_shuffled = X[indices]
@@ -90,13 +100,13 @@ def main() -> None:
 
             optimizer.zero_grad()
             logits = model(x_batch)
-            
+
             # Reshape logits to (batch_size * sequence_length, vocab_size)
             # Reshape targets to (batch_size * sequence_length)
             loss = loss_fn(logits.view(-1, logits.size(-1)), y_batch.view(-1))
             loss.backward()
             optimizer.step()
-            
+
             epoch_loss += loss.item()
 
         avg_loss = epoch_loss / num_batches
@@ -108,17 +118,21 @@ def main() -> None:
     print("\n--- Text Generation AFTER training ---")
     print(f"Prompt: '{prompt}'")
     with torch.no_grad():
-        generated_after = generate_text(model, prompt_ids, max_new_tokens=15, context_len=context_length)
+        generated_after = generate_text(
+            model, prompt_ids, max_new_tokens=15, context_len=context_length
+        )
     print(f"Output: '{tokenizer.decode(generated_after[0].tolist())}'")
     checkpoint_path = Path("data/mini_gpt.pt")
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(model.state_dict(), checkpoint_path)
     print(f"\nSaved MiniGPT checkpoint to: {checkpoint_path}")
-    print("\nObserve how the model learns vocabulary and simple transitions from the training text!")
+    print("\nObserve how the model learns vocabulary and simple transitions.")
 
 
-def generate_text(model: GPTModel, idx: torch.Tensor, max_new_tokens: int, context_len: int) -> torch.Tensor:
-    """Helper to autoregressively generate tokens from a prompt. Call within torch.no_grad()."""
+def generate_text(
+    model: GPTModel, idx: torch.Tensor, max_new_tokens: int, context_len: int
+) -> torch.Tensor:
+    """Autoregressively generate tokens; call inside ``torch.no_grad``."""
     for _ in range(max_new_tokens):
         idx_cond = idx[:, -context_len:]
         logits = model(idx_cond)

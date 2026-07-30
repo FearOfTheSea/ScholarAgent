@@ -20,8 +20,18 @@ from scholar_agent.application.dtos.documents import (
     IngestDocumentRequest,
 )
 from scholar_agent.application.dtos.retrieval import RetrievedChunk
+from scholar_agent.application.dtos.tutor import (
+    ContinueStudySessionRequest,
+    StartStudySessionRequest,
+    TutorActivity,
+)
 from scholar_agent.config.settings import Settings
 from scholar_agent.domain.entities.document import Document
+from scholar_agent.domain.entities.study_session import (
+    LearnerLevel,
+    SourceReference,
+    StudyMode,
+)
 from scholar_agent.infrastructure.di.container import Container, build_container
 
 
@@ -46,13 +56,18 @@ def main() -> None:
             st.success("Local model ready")
         else:
             st.warning("Local model unavailable")
-        page = st.radio("Navigation", ("Library", "Ask Study Agent"))
+        page = st.radio(
+            "Navigation",
+            ("Library", "Adaptive Tutor", "Ask Study Agent"),
+        )
 
     st.title("ScholarAgent")
     if page == "Library":
         _render_library(container, documents)
-    else:
+    elif page == "Ask Study Agent":
         _render_ask_study_agent(container, documents)
+    else:
+        _render_adaptive_tutor(container, documents)
 
 
 def run() -> None:
@@ -123,6 +138,160 @@ def _render_ask_study_agent(
             _render_agent_response(result)
         except (RuntimeError, ValueError) as error:
             st.error(str(error))
+
+
+def _render_adaptive_tutor(
+    container: Container,
+    documents: tuple[Document, ...],
+) -> None:
+    st.subheader("Adaptive Document Tutor")
+    st.caption("A persistent, cited learning path that adapts to demonstrated mastery.")
+    session_id = st.session_state.get("adaptive_tutor_session_id")
+    if not isinstance(session_id, str):
+        _render_start_session(container, documents)
+        return
+    try:
+        result = container.get_study_session_use_case().execute(session_id)
+    except ValueError:
+        st.session_state.pop("adaptive_tutor_session_id", None)
+        st.warning("That session is no longer available.")
+        return
+
+    map_column, tutor_column = st.columns([2, 3])
+    with map_column:
+        _render_document_map(result.session.brief)
+        st.markdown("### Mastery")
+        progress_by_id = {item.objective_id: item for item in result.progress}
+        for objective in result.session.brief.objectives:
+            progress = progress_by_id[objective.identifier]
+            st.write(f"**{objective.title}** · {progress.label.value.title()}")
+            st.progress(progress.percentage)
+        if st.button("End and delete session"):
+            container.delete_study_session_use_case().execute(session_id)
+            st.session_state.pop("adaptive_tutor_session_id", None)
+            st.session_state.pop("adaptive_tutor_activity", None)
+            st.rerun()
+
+    with tutor_column:
+        st.markdown(f"### {result.session.mode.value.title()} session")
+        st.caption(result.session.goal)
+        for turn in result.session.turns:
+            with st.chat_message("user"):
+                st.write(turn.learner_message)
+            with st.chat_message("assistant"):
+                st.markdown(turn.tutor_message)
+                _render_source_references(turn.citations)
+        pending = st.session_state.get("adaptive_tutor_activity")
+        if isinstance(pending, TutorActivity):
+            with st.chat_message("assistant"):
+                st.markdown(pending.message)
+                _render_source_references(pending.citations)
+            st.session_state.pop("adaptive_tutor_activity", None)
+        message = st.chat_input(
+            "Answer, ask for a hint, request an explanation, or ask for a recap"
+        )
+        if message:
+            try:
+                with st.spinner("Assessing, verifying evidence, and adapting..."):
+                    turn_result = container.continue_study_session_use_case().execute(
+                        ContinueStudySessionRequest(session_id, message)
+                    )
+                st.session_state["adaptive_tutor_activity"] = turn_result.activity
+                st.rerun()
+            except (RuntimeError, ValueError) as error:
+                st.error(str(error))
+
+
+def _render_start_session(
+    container: Container,
+    documents: tuple[Document, ...],
+) -> None:
+    document = _select_document(documents, "Tutor document")
+    if document is None:
+        return
+    with st.form("start-adaptive-session"):
+        goal = st.text_input(
+            "Learning goal",
+            value="Understand the document and retain its key ideas.",
+        )
+        left, middle, right = st.columns(3)
+        level = left.selectbox(
+            "Level",
+            tuple(LearnerLevel),
+            index=1,
+            format_func=lambda value: value.value.title(),
+        )
+        mode = middle.selectbox(
+            "Mode",
+            tuple(StudyMode),
+            format_func=lambda value: value.value.title(),
+        )
+        minutes = right.number_input(
+            "Minutes",
+            min_value=5,
+            max_value=240,
+            value=30,
+            step=5,
+        )
+        submitted = st.form_submit_button("Build cited learning path")
+    if submitted:
+        try:
+            with st.spinner("Mapping concepts, objectives, and source evidence..."):
+                result = container.start_study_session_use_case().execute(
+                    StartStudySessionRequest(
+                        document_id=document.identifier,
+                        goal=goal,
+                        learner_level=level,
+                        mode=mode,
+                        target_minutes=int(minutes),
+                    )
+                )
+            st.session_state["adaptive_tutor_session_id"] = result.session.identifier
+            st.session_state["adaptive_tutor_activity"] = result.activity
+            st.rerun()
+        except (RuntimeError, ValueError) as error:
+            st.error(str(error))
+
+
+def _render_document_map(brief: object) -> None:
+    from scholar_agent.domain.entities.study_session import DocumentBrief
+
+    if not isinstance(brief, DocumentBrief):
+        return
+    st.markdown("### Document map")
+    st.write(brief.synopsis)
+    graph_lines = ["digraph concepts {", 'rankdir="LR";']
+    for concept in brief.concepts:
+        safe_id = concept.identifier.replace('"', "")
+        safe_label = concept.label.replace('"', "'")
+        graph_lines.append(f'"{safe_id}" [label="{safe_label}"];')
+        for prerequisite in concept.prerequisite_ids:
+            safe_prerequisite = prerequisite.replace('"', "")
+            graph_lines.append(f'"{safe_prerequisite}" -> "{safe_id}";')
+    graph_lines.append("}")
+    st.graphviz_chart("\n".join(graph_lines))
+    with st.expander("Learning objectives"):
+        for objective in brief.objectives:
+            st.markdown(f"**{objective.title}** — {objective.description}")
+            _render_source_references(objective.citations)
+    with st.expander("Glossary and misconceptions"):
+        for term in brief.glossary:
+            st.markdown(f"**{term.term}:** {term.definition}")
+        if brief.misconceptions:
+            st.markdown("**Watch for:**")
+            for misconception in brief.misconceptions:
+                st.write(f"- {misconception}")
+
+
+def _render_source_references(
+    references: tuple[SourceReference, ...],
+) -> None:
+    if not references:
+        return
+    with st.expander(f"Evidence ({len(references)})"):
+        for reference in references:
+            st.caption(f"Page {reference.page_number} · chunk {reference.chunk_id}")
+            st.write(reference.excerpt)
 
 
 def _render_agent_response(result: AskStudyAgentResult) -> None:

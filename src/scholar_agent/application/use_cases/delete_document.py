@@ -11,6 +11,9 @@ from scholar_agent.domain.exceptions.document_not_found_error import (
     DocumentNotFoundError,
 )
 from scholar_agent.domain.repositories.document_repository import DocumentRepository
+from scholar_agent.domain.repositories.study_session_repository import (
+    StudySessionRepository,
+)
 
 
 class DeleteDocumentUseCase(DeleteDocument):
@@ -21,10 +24,12 @@ class DeleteDocumentUseCase(DeleteDocument):
         document_repository: DocumentRepository,
         document_library: IDocumentLibrary,
         vector_store: IVectorStore,
+        session_repository: StudySessionRepository | None = None,
     ) -> None:
         self._document_repository = document_repository
         self._document_library = document_library
         self._vector_store = vector_store
+        self._session_repository = session_repository
 
     def execute(self, request: DeleteDocumentRequest) -> DeleteDocumentResult:
         """Delete a document and report the completed action."""
@@ -32,6 +37,8 @@ class DeleteDocumentUseCase(DeleteDocument):
         if document is None:
             raise DocumentNotFoundError(request.document_id.value)
         self._vector_store.delete_document(request.document_id)
+        if self._session_repository is not None:
+            self._session_repository.delete_for_document(request.document_id)
         self._document_library.delete(request.document_id)
         self._document_repository.delete(request.document_id)
         return DeleteDocumentResult(document_id=request.document_id, deleted=True)

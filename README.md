@@ -19,6 +19,11 @@ use can continue offline once those files are cached.
 - Hierarchical document summaries, structured quizzes, and flashcards
 - A local FastAPI API and Streamlit interface
 - A unified study agent that selects one or more constrained study use cases
+- An optional localized ScholarGPT checkpoint: a custom GPT-2 124M architecture
+  with response-only instruction tuning, cached decoding, grounded extraction,
+  and contract-safe structured generation
+- Persistent adaptive tutoring with cited document maps, Socratic activities,
+  answer assessment, deterministic mastery tracking, and resumable local sessions
 - Dependency injection that keeps Ollama, FAISS, PyMuPDF, LangChain, and
   LangGraph behind application output ports
 
@@ -79,7 +84,9 @@ All values are environment variables and have matching entries in
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
+| `LLM_PROVIDER_TYPE` | `ollama` | `ollama` or the local `scratch_gpt` adapter |
 | `MODEL_NAME` | `qwen3:1.7b` | Locally installed Ollama model |
+| `SCRATCH_GPT_CHECKPOINT_PATH` | `./data/scholar_gpt.pt` | Trained custom-GPT checkpoint |
 | `OLLAMA_URL` | `http://localhost:11434` | Local Ollama HTTP endpoint |
 | `LLM_CONTEXT_LENGTH` | `4096` | Ollama context window |
 | `LLM_MAX_TOKENS` | `1024` | Maximum generated tokens |
@@ -105,6 +112,10 @@ All values are environment variables and have matching entries in
 | `GET` | `/documents` | List locally indexed documents |
 | `DELETE` | `/documents/{document_id}` | Remove the retained PDF, catalog record, chunks, and vectors |
 | `POST` | `/agent/requests` | Route one free-form, single-PDF study request |
+| `POST` | `/agent/sessions` | Build a cited learning map and start an adaptive session |
+| `POST` | `/agent/sessions/{session_id}/turns` | Submit one learner turn |
+| `GET` | `/agent/sessions/{session_id}` | Resume complete local tutor state |
+| `DELETE` | `/agent/sessions/{session_id}` | Delete a tutor session but retain its PDF |
 | `POST` | `/agent/study` | Deprecated compatibility route for the study agent |
 | `POST` | `/questions` | Ask a cited question over one selected document |
 | `POST` | `/documents/{document_id}/summary` | Create a local hierarchical summary |
@@ -137,6 +148,44 @@ uv run ruff format --check .
 uv run mypy
 uv run pytest
 python -m compileall -q src tests
+```
+
+Run the real local-model adaptive-tutor journey against the bundled
+linear-regression PDF on Windows with:
+
+```powershell
+$env:RUN_LOCAL_E2E = "1"
+.\.venv\Scripts\python.exe -m pytest tests/test_adaptive_tutor_e2e.py -vv
+```
+
+This opt-in test uses the selected local LLM provider, BGE-M3, FAISS, SQLite,
+PyMuPDF, FastAPI, and the real example document. It ingests the PDF, creates a
+session, explains a topic, assesses an answer, resumes the session, deletes the
+document, and verifies session cleanup. Set `E2E_LLM_PROVIDER=scratch_gpt` to
+run it through ScholarGPT.
+
+The unified Study Agent has a separate all-capabilities journey:
+
+```powershell
+$env:RUN_LOCAL_E2E = "1"
+.\.venv\Scripts\python.exe -m pytest tests/test_study_agent_e2e.py -vv
+```
+
+Run the same real-PDF journey through ScholarGPT with:
+
+```powershell
+$env:RUN_LOCAL_E2E = "1"
+$env:E2E_LLM_PROVIDER = "scratch_gpt"
+.\.venv\Scripts\python.exe -m pytest tests/test_study_agent_e2e.py -vv
+```
+
+ScholarGPT can be trained and evaluated entirely through the project `.venv`
+after the GPT-2 files have been cached:
+
+```powershell
+.\.venv\Scripts\python.exe scripts\train_scholar_gpt.py --offline
+.\.venv\Scripts\python.exe scripts\evaluate_scholar_gpt.py `
+  --checkpoint data\scholar_gpt.pt --require-score 6
 ```
 
 ## Evaluation and benchmark
@@ -173,3 +222,18 @@ or a useful combination. The complete plan is validated before execution, each
 capability can run at most once, and partial results survive independent runtime
 failures. Quiz requests are internally capped at 10 and flashcard requests at
 20; the response explains when a requested count was reduced.
+
+## Adaptive tutor demonstration
+
+The **Adaptive Tutor** Streamlit page turns one selected PDF into a persistent
+learning workspace. Starting a session creates and caches a cited synopsis,
+learning objectives, concept graph, glossary, and misconception list. The tutor
+then explains concepts, asks short-answer questions, gives progressive hints,
+assesses learner responses on a validated 0–3 rubric, and recommends the next
+prerequisite-ready objective.
+
+Every factual tutor response includes page/chunk evidence from the selected
+document and passes through a bounded grounding check before it is saved.
+Mastery is calculated in application code from the latest three scored attempts;
+the model cannot assign or mutate mastery directly. Sessions and document briefs
+are stored locally in SQLite and survive application restarts.

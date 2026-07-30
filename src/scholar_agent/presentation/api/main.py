@@ -8,6 +8,7 @@ from scholar_agent.infrastructure.di.container import build_container
 from scholar_agent.presentation.api.documents import router as documents_router
 from scholar_agent.presentation.api.health import router as health_router
 from scholar_agent.presentation.api.study import router as study_router
+from scholar_agent.presentation.api.tutor import router as tutor_router
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -22,6 +23,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(health_router)
     app.include_router(documents_router)
     app.include_router(study_router)
+    app.include_router(tutor_router)
     return app
 
 

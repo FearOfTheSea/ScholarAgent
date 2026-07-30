@@ -127,3 +127,31 @@ never model-generated. Duplicate, unknown, malformed, comparison, and
 multi-document actions execute nothing. One repair attempt is allowed for
 malformed planner output. Runtime failures are isolated so later independent
 tasks can still complete.
+
+## Adaptive single-document tutor
+
+The adaptive tutor is a separate persistent workflow built on the same local
+ports. It never changes the one-document contract:
+
+```mermaid
+flowchart LR
+    start["Start session"] --> brief["Build or load cited document brief"]
+    brief --> session["Persist session in SQLite"]
+    turn["Learner turn"] --> classify["Deterministic intent classification"]
+    classify --> action["Application tutoring service"]
+    action --> verify["One grounding verification"]
+    verify --> persist["Persist turn and scored attempt"]
+    persist --> mastery["Deterministic mastery and next objective"]
+```
+
+`LangGraphTutorRunner` contains only the classify, prepare/verify, and persist
+nodes. `TutorTurnService` owns routing policy, source requirements, rubric
+validation, prerequisite selection, and mastery behavior. The SQLite adapter
+implements the domain repository contract and stores complete session snapshots
+plus cached document briefs. Deleting a document removes both kinds of derived
+state.
+
+Mastery is based on the latest three 0–3 assessments. A session reports
+`unseen`, `developing`, `proficient`, or `mastered`; mastered requires at least
+two attempts. Unsupported multi-document or web requests execute no inference
+and return explicit single-document guidance.

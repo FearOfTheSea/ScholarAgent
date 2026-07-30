@@ -1,12 +1,46 @@
-"""Custom PyTorch GPT model implementation based on the book 'Build a Large Language Model (from Scratch)'."""
+"""A small, educational GPT implementation built from explicit PyTorch blocks."""
 
 import math
+from collections.abc import Mapping
+from typing import Protocol, TypedDict, cast
+
 import torch
 import torch.nn as nn
 
+type AttentionCache = tuple[torch.Tensor, torch.Tensor]
+type ModelCache = tuple[AttentionCache, ...]
+
+
+class GPTConfig(TypedDict):
+    """Strongly typed dimensions shared by every custom GPT block."""
+
+    vocab_size: int
+    context_length: int
+    emb_dim: int
+    n_heads: int
+    n_layers: int
+    bias: bool
+
+
+GPT2_124M_CONFIG: GPTConfig = {
+    "vocab_size": 50257,
+    "context_length": 1024,
+    "emb_dim": 768,
+    "n_heads": 12,
+    "n_layers": 12,
+    "bias": True,
+}
+
+
+class HuggingFaceGPT2(Protocol):
+    """Minimum pretrained-model surface required for weight transfer."""
+
+    def state_dict(self) -> Mapping[str, torch.Tensor]:
+        """Return named GPT-2 tensors."""
+
 
 class LayerNorm(nn.Module):
-    """Custom Layer Normalization module."""
+    """Custom layer normalization."""
 
     def __init__(self, emb_dim: int) -> None:
         super().__init__()
@@ -15,157 +49,272 @@ class LayerNorm(nn.Module):
         self.shift = nn.Parameter(torch.zeros(emb_dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Normalize the last tensor dimension."""
         mean = x.mean(dim=-1, keepdim=True)
-        var = x.var(dim=-1, keepdim=True, unbiased=False)
-        norm_x = (x - mean) / torch.sqrt(var + self.eps)
-        return self.scale * norm_x + self.shift
+        variance = x.var(dim=-1, keepdim=True, unbiased=False)
+        normalized = (x - mean) / torch.sqrt(variance + self.eps)
+        return self.scale * normalized + self.shift
 
 
 class GELU(nn.Module):
-    """Custom GELU activation function approximation."""
+    """Custom GELU activation approximation."""
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return 0.5 * x * (1.0 + torch.tanh(
-            math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3))
-        ))
+        """Apply the tanh GELU approximation used by GPT."""
+        result = (
+            0.5
+            * x
+            * (
+                1.0
+                + torch.tanh(
+                    math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3))
+                )
+            )
+        )
+        return result
 
 
 class FeedForward(nn.Module):
-    """Position-wise Feed-Forward Network."""
+    """Position-wise feed-forward network."""
 
-    def __init__(self, cfg: dict) -> None:
+    def __init__(self, config: GPTConfig) -> None:
         super().__init__()
         self.layers = nn.Sequential(
-            nn.Linear(cfg["emb_dim"], 4 * cfg["emb_dim"]),
+            nn.Linear(config["emb_dim"], 4 * config["emb_dim"]),
             GELU(),
-            nn.Linear(4 * cfg["emb_dim"], cfg["emb_dim"]),
+            nn.Linear(4 * config["emb_dim"], config["emb_dim"]),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.layers(x)
+        """Expand, activate, and project token representations."""
+        return cast(torch.Tensor, self.layers(x))
 
 
 class CausalSelfAttention(nn.Module):
-    """Multi-head Causal Self-Attention mechanism."""
+    """Multi-head causal self-attention."""
 
-    def __init__(self, cfg: dict) -> None:
+    mask: torch.Tensor
+
+    def __init__(self, config: GPTConfig) -> None:
         super().__init__()
-        self.num_heads = cfg["n_heads"]
-        self.emb_dim = cfg["emb_dim"]
-        self.head_dim = cfg["emb_dim"] // cfg["n_heads"]
-        
-        self.W_query = nn.Linear(cfg["emb_dim"], cfg["emb_dim"], bias=cfg["bias"])
-        self.W_key = nn.Linear(cfg["emb_dim"], cfg["emb_dim"], bias=cfg["bias"])
-        self.W_value = nn.Linear(cfg["emb_dim"], cfg["emb_dim"], bias=cfg["bias"])
-        self.out_proj = nn.Linear(cfg["emb_dim"], cfg["emb_dim"], bias=cfg["bias"])
-        
-        self.register_buffer(
-            "mask",
-            torch.triu(torch.ones(cfg["context_length"], cfg["context_length"]), diagonal=1)
+        if config["emb_dim"] % config["n_heads"] != 0:
+            raise ValueError("emb_dim must be divisible by n_heads.")
+        self.num_heads = config["n_heads"]
+        self.emb_dim = config["emb_dim"]
+        self.head_dim = config["emb_dim"] // config["n_heads"]
+
+        self.W_query = nn.Linear(
+            config["emb_dim"], config["emb_dim"], bias=config["bias"]
+        )
+        self.W_key = nn.Linear(
+            config["emb_dim"], config["emb_dim"], bias=config["bias"]
+        )
+        self.W_value = nn.Linear(
+            config["emb_dim"], config["emb_dim"], bias=config["bias"]
+        )
+        self.out_proj = nn.Linear(
+            config["emb_dim"], config["emb_dim"], bias=config["bias"]
         )
 
+        mask = torch.triu(
+            torch.ones(config["context_length"], config["context_length"]),
+            diagonal=1,
+        )
+        self.register_buffer("mask", mask)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        b, num_tokens, d_in = x.shape
+        """Apply scaled dot-product attention without future-token access."""
+        output, _ = self.forward_with_cache(x)
+        return output
+
+    def forward_with_cache(
+        self,
+        x: torch.Tensor,
+        past: AttentionCache | None = None,
+    ) -> tuple[torch.Tensor, AttentionCache]:
+        """Apply attention and return reusable key/value tensors."""
+        batch_size, token_count, _ = x.shape
         keys = self.W_key(x)
         queries = self.W_query(x)
         values = self.W_value(x)
 
-        # Multi-head split
-        keys = keys.view(b, num_tokens, self.num_heads, self.head_dim).transpose(1, 2)
-        queries = queries.view(b, num_tokens, self.num_heads, self.head_dim).transpose(1, 2)
-        values = values.view(b, num_tokens, self.num_heads, self.head_dim).transpose(1, 2)
+        keys = keys.view(
+            batch_size, token_count, self.num_heads, self.head_dim
+        ).transpose(1, 2)
+        queries = queries.view(
+            batch_size, token_count, self.num_heads, self.head_dim
+        ).transpose(1, 2)
+        values = values.view(
+            batch_size, token_count, self.num_heads, self.head_dim
+        ).transpose(1, 2)
+        past_length = 0
+        if past is not None:
+            past_keys, past_values = past
+            past_length = past_keys.size(2)
+            keys = torch.cat((past_keys, keys), dim=2)
+            values = torch.cat((past_values, values), dim=2)
 
-        # Scaled dot-product causal attention
-        attn_scores = queries @ keys.transpose(-2, -1)
-        mask = self.mask[:num_tokens, :num_tokens].bool()
-        attn_scores.masked_fill_(mask, -float("inf"))
+        attention_scores = queries @ keys.transpose(-2, -1)
+        total_length = past_length + token_count
+        causal_mask = self.mask[
+            past_length : past_length + token_count,
+            :total_length,
+        ].bool()
+        attention_scores.masked_fill_(causal_mask, -float("inf"))
+        attention_weights = torch.softmax(
+            attention_scores / math.sqrt(self.head_dim),
+            dim=-1,
+        )
 
-        attn_weights = torch.softmax(attn_scores / math.sqrt(self.head_dim), dim=-1)
-        
-        context_vec = (attn_weights @ values).transpose(1, 2).contiguous()
-        context_vec = context_vec.view(b, num_tokens, self.emb_dim)
-        return self.out_proj(context_vec)
+        context = (attention_weights @ values).transpose(1, 2).contiguous()
+        context = context.view(batch_size, token_count, self.emb_dim)
+        output = cast(torch.Tensor, self.out_proj(context))
+        return output, (keys, values)
 
 
 class TransformerBlock(nn.Module):
-    """A standard Transformer encoder block with residual connections."""
+    """Pre-normalized transformer block with residual connections."""
 
-    def __init__(self, cfg: dict) -> None:
+    def __init__(self, config: GPTConfig) -> None:
         super().__init__()
-        self.ln1 = LayerNorm(cfg["emb_dim"])
-        self.attn = CausalSelfAttention(cfg)
-        self.ln2 = LayerNorm(cfg["emb_dim"])
-        self.ff = FeedForward(cfg)
+        self.ln1 = LayerNorm(config["emb_dim"])
+        self.attn = CausalSelfAttention(config)
+        self.ln2 = LayerNorm(config["emb_dim"])
+        self.ff = FeedForward(config)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.ln1(x))
-        x = x + self.ff(self.ln2(x))
-        return x
+        """Apply attention and feed-forward residual paths."""
+        output, _ = self.forward_with_cache(x)
+        return output
+
+    def forward_with_cache(
+        self,
+        x: torch.Tensor,
+        past: AttentionCache | None = None,
+    ) -> tuple[torch.Tensor, AttentionCache]:
+        """Apply the block and return its reusable attention state."""
+        attention_output, cache = self.attn.forward_with_cache(self.ln1(x), past)
+        x = x + attention_output
+        feed_forward_output = self.ff(self.ln2(x))
+        return cast(torch.Tensor, x + feed_forward_output), cache
 
 
 class GPTModel(nn.Module):
-    """The full GPT model built from custom blocks."""
+    """GPT language model composed from the educational blocks above."""
 
-    def __init__(self, cfg: dict) -> None:
+    def __init__(self, config: GPTConfig) -> None:
         super().__init__()
-        self.tok_emb = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"])
-        self.pos_emb = nn.Embedding(cfg["context_length"], cfg["emb_dim"])
-        self.trf_blocks = nn.ModuleList([TransformerBlock(cfg) for _ in range(cfg["n_layers"])])
-        self.final_ln = LayerNorm(cfg["emb_dim"])
-        self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False)
+        self.tok_emb = nn.Embedding(config["vocab_size"], config["emb_dim"])
+        self.pos_emb = nn.Embedding(config["context_length"], config["emb_dim"])
+        self.trf_blocks = nn.ModuleList(
+            TransformerBlock(config) for _ in range(config["n_layers"])
+        )
+        self.final_ln = LayerNorm(config["emb_dim"])
+        self.out_head = nn.Linear(
+            config["emb_dim"],
+            config["vocab_size"],
+            bias=False,
+        )
+        self.out_head.weight = self.tok_emb.weight
 
     def forward(self, in_idx: torch.Tensor) -> torch.Tensor:
-        b, seq_len = in_idx.shape
-        tok_embeds = self.tok_emb(in_idx)
-        pos_embeds = self.pos_emb(torch.arange(seq_len, device=in_idx.device))
-        x = tok_embeds + pos_embeds
-        for block in self.trf_blocks:
-            x = block(x)
-        x = self.final_ln(x)
-        logits = self.out_head(x)
+        """Return next-token logits for every input position."""
+        logits, _ = self.forward_with_cache(in_idx)
         return logits
 
+    def forward_with_cache(
+        self,
+        in_idx: torch.Tensor,
+        past: ModelCache | None = None,
+    ) -> tuple[torch.Tensor, ModelCache]:
+        """Return logits and key/value state for efficient generation."""
+        _, sequence_length = in_idx.shape
+        past_length = past[0][0].size(2) if past else 0
+        token_embeddings = self.tok_emb(in_idx)
+        positions = torch.arange(
+            past_length,
+            past_length + sequence_length,
+            device=in_idx.device,
+        )
+        position_embeddings = self.pos_emb(positions)
+        x = token_embeddings + position_embeddings
+        caches: list[AttentionCache] = []
+        for index, module in enumerate(self.trf_blocks):
+            block = cast(TransformerBlock, module)
+            block_past = past[index] if past is not None else None
+            x, cache = block.forward_with_cache(x, block_past)
+            caches.append(cache)
+        x = self.final_ln(x)
+        logits = cast(torch.Tensor, self.out_head(x))
+        return logits, tuple(caches)
 
-def load_gpt2_weights(gpt: GPTModel, gpt_hf) -> None:
-    """Copies weights from Hugging Face's pretrained GPT-2 into our custom model structure."""
-    d = gpt_hf.state_dict()
-    
-    gpt.tok_emb.weight.data.copy_(d["transformer.wte.weight"])
-    gpt.pos_emb.weight.data.copy_(d["transformer.wpe.weight"])
-    
-    for i in range(len(gpt.trf_blocks)):
-        block = gpt.trf_blocks[i]
-        hf_prefix = f"transformer.h.{i}."
-        
-        block.ln1.scale.data.copy_(d[f"{hf_prefix}ln_1.weight"])
-        block.ln1.shift.data.copy_(d[f"{hf_prefix}ln_1.bias"])
-        block.ln2.scale.data.copy_(d[f"{hf_prefix}ln_2.weight"])
-        block.ln2.shift.data.copy_(d[f"{hf_prefix}ln_2.bias"])
-        
-        # MLPs require transposition of weights due to Conv1D/Linear layers mismatch
-        block.ff.layers[0].weight.data.copy_(d[f"{hf_prefix}mlp.c_fc.weight"].t())
-        block.ff.layers[0].bias.data.copy_(d[f"{hf_prefix}mlp.c_fc.bias"])
-        block.ff.layers[2].weight.data.copy_(d[f"{hf_prefix}mlp.c_proj.weight"].t())
-        block.ff.layers[2].bias.data.copy_(d[f"{hf_prefix}mlp.c_proj.bias"])
-        
-        # Attention projection merging split
-        qkv_weights = d[f"{hf_prefix}attn.c_attn.weight"].t()
-        qkv_bias = d[f"{hf_prefix}attn.c_attn.bias"]
-        
-        emb_dim = gpt.pos_emb.weight.shape[1]
-        W_q, W_k, W_v = torch.split(qkv_weights, emb_dim, dim=0)
-        b_q, b_k, b_v = torch.split(qkv_bias, emb_dim, dim=0)
-        
-        block.attn.W_query.weight.data.copy_(W_q)
-        block.attn.W_query.bias.data.copy_(b_q)
-        block.attn.W_key.weight.data.copy_(W_k)
-        block.attn.W_key.bias.data.copy_(b_k)
-        block.attn.W_value.weight.data.copy_(W_v)
-        block.attn.W_value.bias.data.copy_(b_v)
-        
-        block.attn.out_proj.weight.data.copy_(d[f"{hf_prefix}attn.c_proj.weight"].t())
-        block.attn.out_proj.bias.data.copy_(d[f"{hf_prefix}attn.c_proj.bias"])
-        
-    gpt.final_ln.scale.data.copy_(d["transformer.ln_f.weight"])
-    gpt.final_ln.shift.data.copy_(d["transformer.ln_f.bias"])
-    gpt.out_head.weight.data.copy_(d["lm_head.weight"])
+
+def load_gpt2_weights(gpt: GPTModel, pretrained: HuggingFaceGPT2) -> None:
+    """Copy Hugging Face GPT-2 weights into the custom model."""
+    weights = pretrained.state_dict()
+
+    gpt.tok_emb.weight.data.copy_(weights["transformer.wte.weight"])
+    gpt.pos_emb.weight.data.copy_(weights["transformer.wpe.weight"])
+
+    for index, module in enumerate(gpt.trf_blocks):
+        block = cast(TransformerBlock, module)
+        prefix = f"transformer.h.{index}."
+
+        block.ln1.scale.data.copy_(weights[f"{prefix}ln_1.weight"])
+        block.ln1.shift.data.copy_(weights[f"{prefix}ln_1.bias"])
+        block.ln2.scale.data.copy_(weights[f"{prefix}ln_2.weight"])
+        block.ln2.shift.data.copy_(weights[f"{prefix}ln_2.bias"])
+
+        input_projection = cast(nn.Linear, block.ff.layers[0])
+        output_projection = cast(nn.Linear, block.ff.layers[2])
+        input_projection.weight.data.copy_(weights[f"{prefix}mlp.c_fc.weight"].t())
+        input_projection.bias.data.copy_(weights[f"{prefix}mlp.c_fc.bias"])
+        output_projection.weight.data.copy_(weights[f"{prefix}mlp.c_proj.weight"].t())
+        output_projection.bias.data.copy_(weights[f"{prefix}mlp.c_proj.bias"])
+
+        query_key_value_weights = weights[f"{prefix}attn.c_attn.weight"].t()
+        query_key_value_bias = weights[f"{prefix}attn.c_attn.bias"]
+        embedding_dimension = gpt.pos_emb.weight.shape[1]
+        query_weight, key_weight, value_weight = torch.split(
+            query_key_value_weights,
+            embedding_dimension,
+            dim=0,
+        )
+        query_bias, key_bias, value_bias = torch.split(
+            query_key_value_bias,
+            embedding_dimension,
+            dim=0,
+        )
+
+        _copy_linear_projection(
+            block.attn.W_query,
+            query_weight,
+            query_bias,
+        )
+        _copy_linear_projection(block.attn.W_key, key_weight, key_bias)
+        _copy_linear_projection(
+            block.attn.W_value,
+            value_weight,
+            value_bias,
+        )
+        _copy_linear_projection(
+            block.attn.out_proj,
+            weights[f"{prefix}attn.c_proj.weight"].t(),
+            weights[f"{prefix}attn.c_proj.bias"],
+        )
+
+    gpt.final_ln.scale.data.copy_(weights["transformer.ln_f.weight"])
+    gpt.final_ln.shift.data.copy_(weights["transformer.ln_f.bias"])
+    gpt.out_head.weight.data.copy_(weights["lm_head.weight"])
+
+
+def _copy_linear_projection(
+    projection: nn.Linear,
+    weight: torch.Tensor,
+    bias: torch.Tensor,
+) -> None:
+    """Copy tensors into a projection that is expected to include bias."""
+    if projection.bias is None:
+        raise ValueError("GPT-2 weight transfer requires biased projections.")
+    projection.weight.data.copy_(weight)
+    projection.bias.data.copy_(bias)

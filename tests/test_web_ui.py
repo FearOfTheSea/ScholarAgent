@@ -13,7 +13,8 @@ def test_streamlit_navigation_is_unified_without_count_or_multi_pdf_controls() -
         / "app.py"
     ).read_text(encoding="utf-8")
 
-    assert '("Library", "Ask Study Agent")' in source
+    assert '"Adaptive Tutor"' in source
+    assert '"Ask Study Agent"' in source
     assert "st.slider" not in source
     assert "st.multiselect" not in source
     assert '"Compare"' not in source

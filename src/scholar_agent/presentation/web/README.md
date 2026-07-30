@@ -1,5 +1,9 @@
 # Streamlit adapter
 
-The Streamlit adapter exposes the local PDF Library and one **Ask Study Agent**
-workflow. It translates a selected PDF and free-form prompt into the unified
-application request and renders each typed result without business logic.
+The Streamlit adapter exposes the local PDF Library, **Adaptive Tutor**, and
+**Ask Study Agent** workflows. It translates presentation input into application
+requests and renders typed results without business logic.
+
+The Adaptive Tutor workspace displays the cached document map, concept
+prerequisites, mastery, persistent conversation, and expandable page/chunk
+evidence while delegating all behavior to application use cases.

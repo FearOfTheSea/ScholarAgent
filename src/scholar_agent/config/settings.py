@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     llm_provider_type: str = Field(default="ollama", min_length=1)
     model_name: str = Field(default="qwen3:1.7b", min_length=1)
-    scratch_gpt_checkpoint_path: Path = Path("data/mini_gpt.pt")
+    scratch_gpt_checkpoint_path: Path = Path("data/scholar_gpt.pt")
     ollama_url: str = Field(default="http://localhost:11434", min_length=1)
     vector_db_path: Path = Path("data/vector_store")
     document_library_path: Path = Path("data/documents")

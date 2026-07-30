@@ -238,3 +238,150 @@ class PrepareStudySessionResponse(BaseModel):
     notices: list[str]
     status: StudyAgentStatusName
     message: str | None = None
+
+
+LearnerLevelName = Literal["beginner", "intermediate", "advanced"]
+StudyModeName = Literal["guided", "exam", "cram"]
+MasteryLabelName = Literal["unseen", "developing", "proficient", "mastered"]
+TutorTurnKindName = Literal[
+    "explanation",
+    "question",
+    "assessment",
+    "hint",
+    "recap",
+    "unsupported",
+]
+
+
+class SourceReferenceResponse(BaseModel):
+    """Evidence displayed in the adaptive tutor."""
+
+    document_id: str
+    chunk_id: str
+    page_number: int | None
+    excerpt: str
+
+
+class LearningObjectiveResponse(BaseModel):
+    """One cited learning objective."""
+
+    id: str
+    title: str
+    description: str
+    prerequisite_ids: list[str]
+    citations: list[SourceReferenceResponse]
+
+
+class ConceptNodeResponse(BaseModel):
+    """One node in the document knowledge map."""
+
+    id: str
+    label: str
+    explanation: str
+    prerequisite_ids: list[str]
+    citations: list[SourceReferenceResponse]
+
+
+class GlossaryTermResponse(BaseModel):
+    """One cited glossary definition."""
+
+    term: str
+    definition: str
+    citations: list[SourceReferenceResponse]
+
+
+class DocumentBriefResponse(BaseModel):
+    """Cited learning map derived from one document."""
+
+    document_id: str
+    synopsis: str
+    objectives: list[LearningObjectiveResponse]
+    concepts: list[ConceptNodeResponse]
+    glossary: list[GlossaryTermResponse]
+    misconceptions: list[str]
+
+
+class ObjectiveProgressResponse(BaseModel):
+    """Current deterministic mastery for an objective."""
+
+    objective_id: str
+    percentage: int
+    label: MasteryLabelName
+    attempt_count: int
+
+
+class TutorActivityResponse(BaseModel):
+    """One learner-facing tutor activity."""
+
+    kind: TutorTurnKindName
+    message: str
+    objective_id: str | None
+    citations: list[SourceReferenceResponse]
+
+
+class LearnerAttemptResponse(BaseModel):
+    """Structured assessment of a learner response."""
+
+    objective_id: str
+    response: str
+    score: int
+    feedback: str
+    missing_concepts: list[str]
+    citations: list[SourceReferenceResponse]
+    created_at: datetime
+
+
+class TutorTurnResponse(BaseModel):
+    """One persisted tutor exchange."""
+
+    kind: TutorTurnKindName
+    learner_message: str
+    tutor_message: str
+    objective_id: str | None
+    citations: list[SourceReferenceResponse]
+    assessment: LearnerAttemptResponse | None
+    created_at: datetime
+
+
+class StartTutorSessionRequestModel(BaseModel):
+    """Start a persistent session over one document."""
+
+    document_id: str
+    goal: str = "Understand the document and retain its key ideas."
+    learner_level: LearnerLevelName = "intermediate"
+    mode: StudyModeName = "guided"
+    target_minutes: int = 30
+
+
+class TutorSessionResponse(BaseModel):
+    """Complete resumable state for one tutor session."""
+
+    session_id: str
+    document_id: str
+    goal: str
+    learner_level: LearnerLevelName
+    mode: StudyModeName
+    target_minutes: int
+    brief: DocumentBriefResponse
+    progress: list[ObjectiveProgressResponse]
+    current_objective_id: str | None
+    activity: TutorActivityResponse | None
+    turns: list[TutorTurnResponse]
+    created_at: datetime
+    updated_at: datetime
+
+
+class ContinueTutorSessionRequestModel(BaseModel):
+    """One learner message in a tutor session."""
+
+    message: str
+
+
+class TutorTurnResultResponse(BaseModel):
+    """Result of one bounded adaptive tutor turn."""
+
+    intent: str
+    activity: TutorActivityResponse
+    assessment: LearnerAttemptResponse | None
+    progress: list[ObjectiveProgressResponse]
+    current_objective_id: str | None
