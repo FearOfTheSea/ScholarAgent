@@ -3,6 +3,17 @@
 from dataclasses import dataclass
 
 from scholar_agent.application.dtos.retrieval import RetrievedChunk
+from scholar_agent.domain.entities.study_material import Flashcard, QuizQuestion
+from scholar_agent.domain.entities.study_session import SourceReference
+
+__all__ = [
+    "AnswerQuestionResult",
+    "Flashcard",
+    "GenerateFlashcardsResult",
+    "GenerateQuizResult",
+    "QuizQuestion",
+    "SummarizeDocumentResult",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,14 +29,7 @@ class SummarizeDocumentResult:
     """A concise document summary."""
 
     summary: str
-
-
-@dataclass(frozen=True, slots=True)
-class QuizQuestion:
-    """A quiz question and its answer."""
-
-    prompt: str
-    answer: str
+    citations: tuple[SourceReference, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,14 +41,7 @@ class GenerateQuizResult:
     effective_count: int
     maximum_count: int
     notice: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class Flashcard:
-    """A study flashcard."""
-
-    front: str
-    back: str
+    citations: tuple[SourceReference, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,3 +53,4 @@ class GenerateFlashcardsResult:
     effective_count: int
     maximum_count: int
     notice: str | None = None
+    citations: tuple[SourceReference, ...] = ()

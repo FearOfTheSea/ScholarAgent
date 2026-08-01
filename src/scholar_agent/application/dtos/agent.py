@@ -5,6 +5,7 @@ from enum import StrEnum
 
 from scholar_agent.application.dtos.retrieval import RetrievedChunk
 from scholar_agent.application.dtos.study_results import Flashcard, QuizQuestion
+from scholar_agent.domain.entities.study_session import SourceReference
 from scholar_agent.domain.value_objects.document_id import DocumentId
 
 
@@ -12,9 +13,14 @@ class StudyTask(StrEnum):
     """A user-facing study capability available to the agent."""
 
     ANSWER_QUESTION = "answer_question"
+    SEMANTIC_SEARCH = "semantic_search"
     SUMMARIZE_DOCUMENT = "summarize_document"
     GENERATE_QUIZ = "generate_quiz"
     GENERATE_FLASHCARDS = "generate_flashcards"
+    CITATION_LOOKUP = "citation_lookup"
+    BUILD_DOCUMENT_MAP = "build_document_map"
+    EXPLAIN_CONCEPT = "explain_concept"
+    ASSESS_LEARNER_RESPONSE = "assess_learner_response"
 
 
 class StudyAgentStatus(StrEnum):
@@ -57,6 +63,7 @@ class StudyAgentSummaryResult:
     """A document summary produced by the summarization use case."""
 
     summary: str
+    citations: tuple[SourceReference, ...] = ()
     task: StudyTask = StudyTask.SUMMARIZE_DOCUMENT
 
 

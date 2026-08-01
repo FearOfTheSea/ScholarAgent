@@ -5,17 +5,29 @@ from dependency_injector import containers, providers
 from scholar_agent.application.services.generation_count_policy import (
     GenerationCountPolicy,
 )
+from scholar_agent.application.services.mission_insights import MissionInsightsService
+from scholar_agent.application.services.mission_planning import MissionPlanner
+from scholar_agent.application.services.mission_state import MissionStateService
 from scholar_agent.application.services.request_validation_service import (
     RequestValidationService,
 )
 from scholar_agent.application.services.tutor_turn_service import TutorTurnService
+from scholar_agent.application.use_cases.advance_study_session import (
+    AdvanceStudySessionUseCase,
+)
 from scholar_agent.application.use_cases.answer_question import AnswerQuestionUseCase
 from scholar_agent.application.use_cases.ask_study_agent import AskStudyAgentUseCase
+from scholar_agent.application.use_cases.assess_learner_response import (
+    AssessLearnerResponseUseCase,
+)
 from scholar_agent.application.use_cases.build_document_brief import (
     BuildDocumentBriefUseCase,
 )
 from scholar_agent.application.use_cases.check_runtime_readiness import (
     CheckRuntimeReadinessUseCase,
+)
+from scholar_agent.application.use_cases.complete_study_session import (
+    CompleteStudySessionUseCase,
 )
 from scholar_agent.application.use_cases.continue_study_session import (
     ContinueStudySessionUseCase,
@@ -24,18 +36,31 @@ from scholar_agent.application.use_cases.delete_document import DeleteDocumentUs
 from scholar_agent.application.use_cases.delete_study_session import (
     DeleteStudySessionUseCase,
 )
+from scholar_agent.application.use_cases.explain_concept import ExplainConceptUseCase
+from scholar_agent.application.use_cases.export_mission_record import (
+    ExportMissionRecordUseCase,
+)
 from scholar_agent.application.use_cases.generate_flashcards import (
     GenerateFlashcardsUseCase,
 )
 from scholar_agent.application.use_cases.generate_quiz import GenerateQuizUseCase
+from scholar_agent.application.use_cases.get_mission_insights import (
+    GetMissionInsightsUseCase,
+)
 from scholar_agent.application.use_cases.get_study_session import GetStudySessionUseCase
 from scholar_agent.application.use_cases.ingest_document import IngestDocumentUseCase
 from scholar_agent.application.use_cases.list_documents import ListDocumentsUseCase
+from scholar_agent.application.use_cases.list_study_sessions import (
+    ListStudySessionsUseCase,
+)
 from scholar_agent.application.use_cases.start_study_session import (
     StartStudySessionUseCase,
 )
 from scholar_agent.application.use_cases.summarize_document import (
     SummarizeDocumentUseCase,
+)
+from scholar_agent.application.use_cases.verify_mission_ledger import (
+    VerifyMissionLedgerUseCase,
 )
 from scholar_agent.config.settings import Settings
 from scholar_agent.infrastructure.adapters.faiss_repository import FAISSRepository
@@ -44,8 +69,8 @@ from scholar_agent.infrastructure.adapters.langchain_retriever import LangChainR
 from scholar_agent.infrastructure.adapters.langchain_text_chunker import (
     LangChainTextChunker,
 )
-from scholar_agent.infrastructure.adapters.langgraph_agent_runner import (
-    LangGraphAgentRunner,
+from scholar_agent.infrastructure.adapters.langgraph_mission_runner import (
+    LangGraphMissionRunner,
 )
 from scholar_agent.infrastructure.adapters.langgraph_runner import LangGraphRunner
 from scholar_agent.infrastructure.adapters.langgraph_tutor_runner import (
@@ -56,6 +81,7 @@ from scholar_agent.infrastructure.adapters.local_document_library import (
 )
 from scholar_agent.infrastructure.adapters.ollama_adapter import OllamaAdapter
 from scholar_agent.infrastructure.adapters.pymupdf_loader import PyMuPDFLoader
+from scholar_agent.infrastructure.adapters.quick_ask_runner import QuickAskRunner
 from scholar_agent.infrastructure.adapters.scratch_gpt.scratch_gpt_adapter import (
     ScratchGPTAdapter,
 )
@@ -69,8 +95,18 @@ from scholar_agent.infrastructure.adapters.sqlite_study_session_repository impor
     SQLiteStudySessionRepository,
 )
 from scholar_agent.infrastructure.tools.answer_question_tool import AnswerQuestionTool
-from scholar_agent.infrastructure.tools.capabilities import STUDY_CAPABILITIES
+from scholar_agent.infrastructure.tools.assess_learner_response_tool import (
+    AssessLearnerResponseTool,
+)
+from scholar_agent.infrastructure.tools.build_document_map_tool import (
+    BuildDocumentMapTool,
+)
+from scholar_agent.infrastructure.tools.capabilities import (
+    MISSION_CAPABILITIES,
+    STUDY_CAPABILITIES,
+)
 from scholar_agent.infrastructure.tools.citation_lookup_tool import CitationLookupTool
+from scholar_agent.infrastructure.tools.explain_concept_tool import ExplainConceptTool
 from scholar_agent.infrastructure.tools.generate_flashcards_tool import (
     GenerateFlashcardsTool,
 )
@@ -118,6 +154,7 @@ class Container(containers.DeclarativeContainer):
         LangChainRetriever,
         embedding_provider=embedding_provider,
         vector_store=vector_store,
+        default_limit=config.retrieval_top_k,
     )
     pdf_loader = providers.Singleton(PyMuPDFLoader)
     text_chunker = providers.Singleton(
@@ -137,7 +174,16 @@ class Container(containers.DeclarativeContainer):
         SQLiteStudySessionRepository,
         database_path=config.catalog_db_path,
     )
+    mission_state_service = providers.Factory(
+        MissionStateService,
+        session_repository=study_session_repository,
+    )
     memory_store = providers.Singleton(InMemoryStore)
+    mission_planner = providers.Factory(
+        MissionPlanner,
+        llm_provider=llm_provider,
+        maximum_objectives=config.agent_max_objectives,
+    )
 
     check_runtime_readiness_use_case = providers.Factory(
         CheckRuntimeReadinessUseCase,
@@ -223,33 +269,72 @@ class Container(containers.DeclarativeContainer):
         capabilities=providers.Object(STUDY_CAPABILITIES),
     )
     graph_runner = providers.Singleton(LangGraphRunner, tool_executor=tool_executor)
-    agent_runner = providers.Singleton(
-        LangGraphAgentRunner,
-        tool_executor=tool_executor,
-        llm_provider=llm_provider,
-    )
-    ask_study_agent_use_case = providers.Factory(
-        AskStudyAgentUseCase,
-        agent_runner=agent_runner,
-        validation_service=validation_service,
-    )
     build_document_brief_use_case = providers.Factory(
         BuildDocumentBriefUseCase,
         llm_provider=llm_provider,
         vector_store=vector_store,
         session_repository=study_session_repository,
     )
+    explain_concept_use_case = providers.Factory(
+        ExplainConceptUseCase,
+        llm_provider=llm_provider,
+        vector_store=vector_store,
+        session_repository=study_session_repository,
+    )
+    assess_learner_response_use_case = providers.Factory(
+        AssessLearnerResponseUseCase,
+        llm_provider=llm_provider,
+        vector_store=vector_store,
+        session_repository=study_session_repository,
+    )
+    build_document_map_tool = providers.Factory(
+        BuildDocumentMapTool,
+        use_case=build_document_brief_use_case,
+    )
+    explain_concept_tool = providers.Factory(
+        ExplainConceptTool,
+        use_case=explain_concept_use_case,
+    )
+    assess_learner_response_tool = providers.Factory(
+        AssessLearnerResponseTool,
+        use_case=assess_learner_response_use_case,
+    )
+    mission_tool_executor = providers.Singleton(
+        StudyToolExecutor,
+        tools=providers.Dict(
+            semantic_search=semantic_search_tool,
+            summarize_document=summarize_document_tool,
+            generate_quiz=generate_quiz_tool,
+            generate_flashcards=generate_flashcards_tool,
+            citation_lookup=citation_lookup_tool,
+            build_document_map=build_document_map_tool,
+            explain_concept=explain_concept_tool,
+            assess_learner_response=assess_learner_response_tool,
+        ),
+        capabilities=providers.Object(MISSION_CAPABILITIES),
+    )
+    agent_runner = providers.Singleton(
+        QuickAskRunner, tool_executor=mission_tool_executor
+    )
+    ask_study_agent_use_case = providers.Factory(
+        AskStudyAgentUseCase,
+        agent_runner=agent_runner,
+        validation_service=validation_service,
+    )
     start_study_session_use_case = providers.Factory(
         StartStudySessionUseCase,
         brief_use_case=build_document_brief_use_case,
         session_repository=study_session_repository,
         validation_service=validation_service,
+        mission_planner=mission_planner,
+        state_service=mission_state_service,
     )
     tutor_turn_service = providers.Factory(
         TutorTurnService,
         llm_provider=llm_provider,
         retriever=retriever,
         session_repository=study_session_repository,
+        state_service=mission_state_service,
     )
     tutor_runner = providers.Factory(
         LangGraphTutorRunner,
@@ -267,6 +352,45 @@ class Container(containers.DeclarativeContainer):
     delete_study_session_use_case = providers.Factory(
         DeleteStudySessionUseCase,
         session_repository=study_session_repository,
+    )
+    mission_runner = providers.Factory(
+        LangGraphMissionRunner,
+        tool_executor=mission_tool_executor,
+        session_repository=study_session_repository,
+        maximum_actions_per_turn=config.agent_max_actions_per_turn,
+        maximum_actions_per_session=config.agent_max_actions_per_session,
+        state_service=mission_state_service,
+    )
+    advance_study_session_use_case = providers.Factory(
+        AdvanceStudySessionUseCase,
+        mission_runner=mission_runner,
+        validation_service=validation_service,
+    )
+    complete_study_session_use_case = providers.Factory(
+        CompleteStudySessionUseCase,
+        session_repository=study_session_repository,
+        state_service=mission_state_service,
+    )
+    list_study_sessions_use_case = providers.Factory(
+        ListStudySessionsUseCase,
+        session_repository=study_session_repository,
+    )
+    mission_insights_use_case = providers.Factory(
+        GetMissionInsightsUseCase,
+        session_repository=study_session_repository,
+        insights_service=providers.Factory(
+            MissionInsightsService,
+            maximum_actions_per_session=config.agent_max_actions_per_session,
+        ),
+    )
+    verify_mission_ledger_use_case = providers.Factory(
+        VerifyMissionLedgerUseCase,
+        session_repository=study_session_repository,
+    )
+    export_mission_record_use_case = providers.Factory(
+        ExportMissionRecordUseCase,
+        session_repository=study_session_repository,
+        insights_use_case=mission_insights_use_case,
     )
 
 

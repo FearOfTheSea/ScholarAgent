@@ -14,19 +14,22 @@ class LangChainRetriever(IRetriever):
         self,
         embedding_provider: IEmbeddingProvider,
         vector_store: IVectorStore,
+        default_limit: int = 5,
     ) -> None:
         self._embedding_provider = embedding_provider
         self._vector_store = vector_store
+        self._default_limit = default_limit
 
     def retrieve(
         self,
         query: str,
-        limit: int = 5,
+        limit: int | None = None,
         document_ids: tuple[DocumentId, ...] = (),
     ) -> tuple[RetrievedChunk, ...]:
         """Embed a query and retrieve its closest local chunks."""
+        effective_limit = self._default_limit if limit is None else limit
         return self._vector_store.search(
             embedding=self._embedding_provider.embed(query),
-            limit=limit,
+            limit=effective_limit,
             document_ids=document_ids,
         )

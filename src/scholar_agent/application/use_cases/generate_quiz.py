@@ -12,7 +12,7 @@ from scholar_agent.application.services.generation_count_policy import (
     GenerationCountPolicy,
     generation_limit_notice,
 )
-from scholar_agent.application.services.structured_output import parse_items
+from scholar_agent.application.services.structured_output import parse_cited_items
 from scholar_agent.application.services.study_prompts import (
     chunks_to_source_text,
     quiz_prompt,
@@ -41,17 +41,36 @@ class GenerateQuizUseCase(GenerateQuiz):
         chunks = self._vector_store.list_document_chunks(request.document_id)
         if not chunks:
             raise DocumentNotFoundError(request.document_id.value)
+        prompt = quiz_prompt(chunks_to_source_text(chunks), count.effective)
         raw_output = self._llm_provider.generate(
-            quiz_prompt(chunks_to_source_text(chunks), count.effective),
+            prompt,
         )
+        try:
+            parsed = parse_cited_items(
+                raw_output,
+                "prompt",
+                "answer",
+                chunks,
+            )
+        except ValueError as first_error:
+            repaired = self._llm_provider.generate(
+                f"{prompt}\nVALIDATION ERROR: {first_error}\n"
+                "Return only the corrected JSON array."
+            )
+            parsed = parse_cited_items(repaired, "prompt", "answer", chunks)
         questions = tuple(
-            QuizQuestion(prompt=prompt, answer=answer)
-            for prompt, answer in parse_items(raw_output, "prompt", "answer")
+            QuizQuestion(prompt=item_prompt, answer=answer, citations=citations)
+            for item_prompt, answer, citations in parsed
         )
+        citations = tuple(
+            reference for question in questions for reference in question.citations
+        )
+        citations = tuple(dict.fromkeys(citations))
         return GenerateQuizResult(
             questions=questions[: count.effective],
             requested_count=count.requested,
             effective_count=count.effective,
             maximum_count=count.maximum,
             notice=generation_limit_notice("quiz questions", count),
+            citations=citations,
         )

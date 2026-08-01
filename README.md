@@ -18,12 +18,16 @@ use can continue offline once those files are cached.
   citations
 - Hierarchical document summaries, structured quizzes, and flashcards
 - A local FastAPI API and Streamlit interface
-- A unified study agent that selects one or more constrained study use cases
+- A bounded, persistent **Study Mission** that plans prerequisite-valid objectives,
+  teaches, assesses, remediates, and resumes for one selected PDF
+- A stateless **Quick Ask** compatibility route using the same cited capabilities
 - An optional localized ScholarGPT checkpoint: a custom GPT-2 124M architecture
   with response-only instruction tuning, cached decoding, grounded extraction,
   and contract-safe structured generation
 - Persistent adaptive tutoring with cited document maps, Socratic activities,
   answer assessment, deterministic mastery tracking, and resumable local sessions
+- Verifiable Mission Intelligence with a bounded chained ledger, deterministic
+  learning signals, tamper-aware verification, and redacted local export
 - Dependency injection that keeps Ollama, FAISS, PyMuPDF, LangChain, and
   LangGraph behind application output ports
 
@@ -113,7 +117,13 @@ All values are environment variables and have matching entries in
 | `DELETE` | `/documents/{document_id}` | Remove the retained PDF, catalog record, chunks, and vectors |
 | `POST` | `/agent/requests` | Route one free-form, single-PDF study request |
 | `POST` | `/agent/sessions` | Build a cited learning map and start an adaptive session |
+| `GET` | `/agent/sessions` | List resumable missions with document/status filters |
 | `POST` | `/agent/sessions/{session_id}/turns` | Submit one learner turn |
+| `POST` | `/agent/sessions/{session_id}/advance` | Continue or submit a learner response |
+| `POST` | `/agent/sessions/{session_id}/complete` | Mark a mission complete with a recap |
+| `GET` | `/agent/sessions/{session_id}/insights` | Read deterministic Mission Intelligence signals |
+| `GET` | `/agent/sessions/{session_id}/record` | Export a redacted, versioned mission record |
+| `POST` | `/agent/sessions/{session_id}/record/verify` | Verify the mission ledger |
 | `GET` | `/agent/sessions/{session_id}` | Resume complete local tutor state |
 | `DELETE` | `/agent/sessions/{session_id}` | Delete a tutor session but retain its PDF |
 | `POST` | `/agent/study` | Deprecated compatibility route for the study agent |
@@ -214,26 +224,26 @@ layout.
 
 ## Agent demonstration
 
-The `POST /agent/requests` endpoint and **Ask Study Agent** Streamlit page accept
+The `POST /agent/requests` endpoint and **Quick Ask** Streamlit page accept
 one PDF and a request such as “Explain gradient descent,” “Create 50 quiz
-questions,” or “Prepare me for an exam.” A constrained local-LLM planner may
-select question answering, summarization, quiz generation, flashcard generation,
-or a useful combination. The complete plan is validated before execution, each
-capability can run at most once, and partial results survive independent runtime
-failures. Quiz requests are internally capped at 10 and flashcard requests at
-20; the response explains when a requested count was reduced.
+questions,” or “Prepare me for an exam.” Questions use semantic search, the
+cited document map, and an explanation; material requests use cited summary,
+quiz, and flashcard capabilities. The selected document is injected by the
+application and is never chosen by the model. Direct question, summary, quiz,
+and flashcard endpoints remain available.
 
-## Adaptive tutor demonstration
+## Study Mission demonstration
 
-The **Adaptive Tutor** Streamlit page turns one selected PDF into a persistent
-learning workspace. Starting a session creates and caches a cited synopsis,
-learning objectives, concept graph, glossary, and misconception list. The tutor
-then explains concepts, asks short-answer questions, gives progressive hints,
-assesses learner responses on a validated 0–3 rubric, and recommends the next
-prerequisite-ready objective.
+The **Study Mission** Streamlit page turns one selected PDF and learner goal into
+a persistent learning workspace. Starting a mission creates and caches a cited
+document map, selects prerequisite-valid objectives for guided, exam, or cram
+mode, and displays the ordered plan. The mission then explains concepts, asks
+short-answer questions, gives progressive hints, assesses learner responses on
+a validated 0–3 rubric, and inserts cited remediation when needed.
 
-Every factual tutor response includes page/chunk evidence from the selected
-document and passes through a bounded grounding check before it is saved.
-Mastery is calculated in application code from the latest three scored attempts;
-the model cannot assign or mutate mastery directly. Sessions and document briefs
-are stored locally in SQLite and survive application restarts.
+Every generated material and learner-facing mission response carries validated
+page/chunk evidence from the selected document. Mastery is calculated in
+application code from scored attempts; the model cannot assign or mutate mastery
+directly. Sessions, artifacts, and concise capability traces are stored locally
+in SQLite and survive application restarts. Optional artifact failures remain
+visible without discarding the resumable mission.

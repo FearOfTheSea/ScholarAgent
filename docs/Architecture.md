@@ -92,46 +92,82 @@ use cases:
 - `AnswerQuestionUseCase` retrieves relevant chunks and returns an answer with
   citations, or states that selected material does not support a claim.
 - `SummarizeDocumentUseCase` produces a hierarchical summary when a document
-  is larger than the local context budget.
+  is larger than the local context budget. Each segment preserves its chunk
+  labels and validates citations only against that segment; combination accepts
+  only the deduplicated union of partial citations.
 - `GenerateQuizUseCase` and `GenerateFlashcardsUseCase` require typed,
-  validated structured output and apply the internal 10-question and
-  20-flashcard limits.
+  validated structured output, require at least one citation per item, and
+  apply the internal 10-question and 20-flashcard limits.
 
 ## Optional graph orchestration
 
 `LangGraphRunner` is intentionally a one-node, thin executor. It accepts an
 explicit tool name and arguments, then delegates to `IToolExecutor`. The
 available local tools include semantic search, question answering, summary,
-quiz, flashcards, and citation lookup. It is not responsible for business rules
-or arbitrary execution.
+quiz, flashcards, citation lookup, document-map construction, concept
+explanation, and learner assessment. The mission catalog does not register
+`answer_question`; direct QA remains an application endpoint. It is not
+responsible for business rules or arbitrary execution.
 
-## Unified study agent
+## Quick Ask compatibility
 
-The `/agent/requests` endpoint and Streamlit **Ask Study Agent** page use
-`AskStudyAgentUseCase` and `LangGraphAgentRunner`. Every request selects exactly
-one document. The local LLM proposes one or more actions from an explicit
-capability catalog:
+The `/agent/requests` endpoint and Streamlit **Quick Ask** page use
+`AskStudyAgentUseCase` with a bounded compatibility runner. A question executes
+semantic search, builds the cited document map, and explains the first valid
+objective. The document identifier is injected by the application; no model
+output can select or broaden it. Material requests retain the direct cited
+summary, quiz, and flashcard contracts.
 
 ```mermaid
 flowchart TB
-    request["Prompt and one document"] --> planner["Constrained JSON planner"]
-    planner --> validate["Validate every action"]
-    validate --> execute["Execute registered use cases in order"]
-    execute --> collect["Collect typed results, notices, citations, and errors"]
+    request["Prompt and one document"] --> route["Bounded compatibility route"]
+    route --> search["Semantic search"]
+    search --> map["Cited document map"]
+    map --> explain["Cited explanation"]
+    explain --> collect["Typed answer and citations"]
 ```
 
-The planner can select question answering, summarization, quiz generation, and
-flashcard generation. It may infer a bundle for a broad study goal, but each
-capability can appear only once. Document IDs are injected after validation and
-never model-generated. Duplicate, unknown, malformed, comparison, and
-multi-document actions execute nothing. One repair attempt is allowed for
-malformed planner output. Runtime failures are isolated so later independent
-tasks can still complete.
+The legacy response shape is preserved for callers while the underlying path
+uses only the eight mission capabilities. Unsupported web, comparison, and
+multi-document requests execute no inference.
 
-## Adaptive single-document tutor
+## Persistent Study Mission
 
-The adaptive tutor is a separate persistent workflow built on the same local
-ports. It never changes the one-document contract:
+`StudySession` is the single aggregate for a resumable mission. `MissionPlanner`
+validates the exact `{focus, objective_ids}` contract, applies target-minute
+capacity, expands prerequisite closure in cited brief order, and falls back to
+the earliest valid objectives after one repair attempt. Mode-specific milestones
+drive the same capability catalog for guided, exam, and cram missions.
+
+`LangGraphMissionRunner` keeps graph nodes thin and persists after every
+capability execution. It limits automatic work to four executions per advance
+and 64 per session, isolates optional artifact failures, and records only plan,
+capability, state, wait, completion, and failure summaries. A pending learner
+question is the boundary between automatic work and learner input. Scores 0–1
+trigger cited search/remediation, score 2 produces another check, and score 3
+recomputes mastery before advancing.
+
+The SQLite adapter reads missing/schema-version-1 and version-2 payloads into
+the current domain shape and emits top-level `schema_version=3` on every save.
+The version is an adapter serialization detail, not a `StudySession` field.
+Version 3 stores an append-only, SHA-256 chained, bounded mission ledger inside
+the aggregate. The Application mission state service is its only writer; the
+LangGraph adapter only routes graph state. API and UI routes expose additive
+status, plan, artifacts, pending interaction, trace, and completion fields; the
+pending reference answer is never serialized.
+
+Mission Intelligence is deterministic and local. Progress, mastery counts,
+first-pass proficiency, remediation cycles, evidence coverage, action budget,
+next action, and signal codes are calculated from the session and verified
+ledger without model calls. Record export includes only redacted transition
+summaries, replay-safe projections, citation identities, and artifact metadata;
+it excludes learner responses, prompts, reference answers, model output, and
+source excerpts.
+
+## Mission learner loop
+
+The mission workflow is built on the same local ports and never changes the
+one-document contract:
 
 ```mermaid
 flowchart LR

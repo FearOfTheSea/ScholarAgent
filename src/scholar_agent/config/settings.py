@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     llm_max_tokens: int = Field(default=1024, ge=32)
     ollama_num_parallel: int = Field(default=1, ge=1)
     ollama_max_loaded_models: int = Field(default=1, ge=1)
+    agent_max_actions_per_turn: int = Field(default=4, ge=1)
+    agent_max_actions_per_session: int = Field(default=64, ge=1)
+    agent_max_objectives: int = Field(default=6, ge=1, le=6)
     debug: bool = False
 
     model_config = SettingsConfigDict(
@@ -54,4 +57,7 @@ class Settings(BaseSettings):
             "llm_max_tokens": self.llm_max_tokens,
             "ollama_num_parallel": self.ollama_num_parallel,
             "ollama_max_loaded_models": self.ollama_max_loaded_models,
+            "agent_max_actions_per_turn": self.agent_max_actions_per_turn,
+            "agent_max_actions_per_session": self.agent_max_actions_per_session,
+            "agent_max_objectives": self.agent_max_objectives,
         }

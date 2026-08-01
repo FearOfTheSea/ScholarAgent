@@ -6,6 +6,14 @@ import re
 
 def structured_response(prompt: str) -> str | None:
     """Return a contract-safe response for recognized structured prompts."""
+    if prompt.startswith("Choose a bounded study mission"):
+        return _mission_plan_response(prompt)
+    if prompt.startswith("Write a concise study summary"):
+        return _summary_response(prompt)
+    if prompt.startswith("Combine these partial summaries"):
+        return _combined_summary_response(prompt)
+    if prompt.startswith("Explain one learning objective"):
+        return _explanation_response(prompt)
     if prompt.startswith("You are the constrained planner"):
         return _planner_response(prompt)
     if prompt.startswith("Create exactly") and '"prompt"' in prompt:
@@ -14,7 +22,7 @@ def structured_response(prompt: str) -> str | None:
         return _flashcard_response(prompt)
     if "OUTPUT CONTRACT (MANDATORY):" in prompt and "DOCUMENT_ID:" in prompt:
         return _document_brief_response(prompt)
-    if prompt.startswith("Assess the learner response using only the sources."):
+    if prompt.startswith("Assess the learner response using only the "):
         return _assessment_response(prompt)
     if prompt.startswith("Verify whether every factual claim in RESPONSE"):
         return _verification_response(prompt)
@@ -105,14 +113,74 @@ def _planner_response(prompt: str) -> str:
     return json.dumps({"actions": actions, "message": message})
 
 
+def _mission_plan_response(prompt: str) -> str:
+    objectives_text = prompt.split("OBJECTIVES:", 1)[-1].strip()
+    try:
+        objectives = json.loads(objectives_text)
+    except json.JSONDecodeError as error:
+        raise ValueError("Mission prompt contains invalid objective JSON.") from error
+    if not isinstance(objectives, list) or not objectives:
+        raise ValueError("Mission prompt contains no objectives.")
+    first = objectives[0]
+    if not isinstance(first, dict) or not isinstance(first.get("id"), str):
+        raise ValueError("Mission prompt contains an invalid objective.")
+    return json.dumps(
+        {
+            "focus": (
+                "Build a prerequisite-first understanding of the selected document."
+            ),
+            "objective_ids": [first["id"]],
+        }
+    )
+
+
+def _summary_response(prompt: str) -> str:
+    source = prompt.split("Source text:", 1)[-1]
+    return json.dumps(
+        {
+            "summary": " ".join(_source_sentences(prompt)[:5]),
+            "citations": _source_chunk_ids(source),
+        }
+    )
+
+
+def _combined_summary_response(prompt: str) -> str:
+    summaries = prompt.split("Partial summaries:", 1)[-1].split(
+        "Cite only these exact chunk IDs", 1
+    )[0]
+    citation_text = prompt.split("Cite only these exact chunk IDs", 1)[-1]
+    citation_text = citation_text.split("array:", 1)[-1]
+    return json.dumps(
+        {
+            "summary": " ".join(_sentences(summaries)[:5]),
+            "citations": _source_chunk_ids(citation_text),
+        }
+    )
+
+
+def _explanation_response(prompt: str) -> str:
+    objective = _between(prompt, "OBJECTIVE_ID:", "\nSTYLE:")
+    source = prompt.split("SOURCES:", 1)[-1]
+    sentences = _sentences(source)
+    return json.dumps(
+        {
+            "explanation": " ".join(sentences[:3]),
+            "check_question": f"How would you explain {objective} in your own words?",
+            "citations": _source_chunk_ids(source),
+        }
+    )
+
+
 def _quiz_response(prompt: str) -> str:
     count = _leading_count(prompt)
     sentences = _source_sentences(prompt)
+    citations = _source_chunk_ids(prompt.split("Source text:", 1)[-1])
     return json.dumps(
         [
             {
                 "prompt": f"What does study point {index} explain?",
                 "answer": sentences[(index - 1) % len(sentences)],
+                "citations": [citations[(index - 1) % len(citations)]],
             }
             for index in range(1, count + 1)
         ]
@@ -122,11 +190,13 @@ def _quiz_response(prompt: str) -> str:
 def _flashcard_response(prompt: str) -> str:
     count = _leading_count(prompt)
     sentences = _source_sentences(prompt)
+    citations = _source_chunk_ids(prompt.split("Source text:", 1)[-1])
     return json.dumps(
         [
             {
                 "front": f"Study point {index}",
                 "back": sentences[(index - 1) % len(sentences)],
+                "citations": [citations[(index - 1) % len(citations)]],
             }
             for index in range(1, count + 1)
         ]
@@ -192,7 +262,13 @@ def _document_brief_response(prompt: str) -> str:
 
 def _assessment_response(prompt: str) -> str:
     learner_response = _between(prompt, "LEARNER RESPONSE:", "\n\nSOURCES:")
-    objective = _between(prompt, "OBJECTIVE:", "\nLEARNER RESPONSE:")
+    objective_marker = "OBJECTIVE_ID:" if "OBJECTIVE_ID:" in prompt else "OBJECTIVE:"
+    objective_end = (
+        "\nPENDING_QUESTION:"
+        if objective_marker == "OBJECTIVE_ID:"
+        else "\nLEARNER RESPONSE:"
+    )
+    objective = _between(prompt, objective_marker, objective_end)
     source = prompt.split("SOURCES:", 1)[-1]
     response_terms = _content_terms(learner_response)
     evidence_terms = _content_terms(f"{objective} {source}")
@@ -217,16 +293,17 @@ def _assessment_response(prompt: str) -> str:
             "Your response needs a clearer connection to the cited material. "
             "Restate the central relationship using the source terminology."
         )
-    return json.dumps(
-        {
-            "score": score,
-            "feedback": feedback,
-            "missing_concepts": missing,
-            "next_question": (
-                f"How would you explain {objective.strip()} in your own words?"
-            ),
-        }
-    )
+    result: dict[str, object] = {
+        "score": score,
+        "feedback": feedback,
+        "missing_concepts": missing,
+        "next_question": (
+            f"How would you explain {objective.strip()} in your own words?"
+        ),
+    }
+    if "supplied excerpts" in prompt:
+        result["citations"] = _source_chunk_ids(source)
+    return json.dumps(result)
 
 
 def _verification_response(prompt: str) -> str:
@@ -242,7 +319,23 @@ def _verification_response(prompt: str) -> str:
 
 def _source_sentences(prompt: str) -> tuple[str, ...]:
     source = prompt.split("Source text:", 1)[-1]
-    return _sentences(source)
+    return _sentences(_source_content(source))
+
+
+def _source_chunk_ids(source: str) -> tuple[str, ...]:
+    identifiers = tuple(re.findall(r"\[([^|\]]+)\|page=", source))
+    if identifiers:
+        return identifiers
+    identifiers = tuple(
+        line.strip()
+        for line in source.splitlines()
+        if line.strip() and not line.strip().startswith(("[", "Return"))
+    )
+    return identifiers or ("chunk-1",)
+
+
+def _source_content(source: str) -> str:
+    return re.sub(r"\[[^|\]]+\|page=[^\]]+\]\s*", "", source)
 
 
 def _sentences(source: str) -> tuple[str, ...]:

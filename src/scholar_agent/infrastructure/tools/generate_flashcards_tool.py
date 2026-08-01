@@ -22,12 +22,34 @@ class GenerateFlashcardsTool:
         )
         return {
             "cards": [
-                {"front": card.front, "back": card.back} for card in result.cards
+                {
+                    "front": card.front,
+                    "back": card.back,
+                    "citations": [
+                        {
+                            "document_id": reference.document_id.value,
+                            "chunk_id": reference.chunk_id,
+                            "page_number": reference.page_number,
+                            "excerpt": reference.excerpt,
+                        }
+                        for reference in card.citations
+                    ],
+                }
+                for card in result.cards
             ],
             "requested_count": result.requested_count,
             "effective_count": result.effective_count,
             "maximum_count": result.maximum_count,
             "notice": result.notice,
+            "citations": [
+                {
+                    "document_id": reference.document_id.value,
+                    "chunk_id": reference.chunk_id,
+                    "page_number": reference.page_number,
+                    "excerpt": reference.excerpt,
+                }
+                for reference in result.citations
+            ],
         }
 
 
@@ -40,6 +62,6 @@ def _document_id(arguments: Mapping[str, object]) -> DocumentId:
 
 def _count(arguments: Mapping[str, object], key: str, default: int) -> int:
     value = arguments.get(key, default)
-    if not isinstance(value, int) or value < 1:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"'{key}' must be a positive integer.")
     return value

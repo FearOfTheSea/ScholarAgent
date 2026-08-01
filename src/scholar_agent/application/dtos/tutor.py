@@ -7,6 +7,7 @@ from scholar_agent.domain.entities.study_session import (
     DocumentBrief,
     LearnerAttempt,
     LearnerLevel,
+    MissionTraceEvent,
     ObjectiveProgress,
     SourceReference,
     StudyMode,
@@ -53,6 +54,12 @@ class StudySessionResult:
     progress: tuple[ObjectiveProgress, ...]
     current_objective_id: str | None
     activity: TutorActivity | None = None
+    new_trace_events: tuple[MissionTraceEvent, ...] = ()
+
+    @property
+    def can_advance(self) -> bool:
+        """Whether a non-terminal mission can accept another action."""
+        return self.session.status.value in {"active", "awaiting_learner"}
 
 
 @dataclass(frozen=True, slots=True)

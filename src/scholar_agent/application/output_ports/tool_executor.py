@@ -13,6 +13,7 @@ class ToolArgumentKind(StrEnum):
 
     TEXT = "text"
     POSITIVE_INTEGER = "positive_integer"
+    STRING_ARRAY = "string_array"
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,7 +23,7 @@ class ToolArgumentDefinition:
     name: str
     kind: ToolArgumentKind
     required: bool
-    default: str | int | None = None
+    default: str | int | tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)

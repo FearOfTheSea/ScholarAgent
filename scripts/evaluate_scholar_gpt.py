@@ -11,12 +11,31 @@ from scholar_agent.application.services.document_brief_parser import (
     document_brief_prompt,
     parse_document_brief,
 )
-from scholar_agent.application.services.structured_output import parse_items
+from scholar_agent.application.services.mission_planning import (
+    build_mission_plan_prompt,
+    parse_mission_plan,
+)
+from scholar_agent.application.services.mission_prompts import (
+    assess_response_prompt,
+    explain_concept_prompt,
+)
+from scholar_agent.application.services.structured_output import (
+    parse_assessment,
+    parse_cited_items,
+    parse_explanation,
+)
 from scholar_agent.application.services.study_prompts import (
     flashcards_prompt,
     quiz_prompt,
 )
+from scholar_agent.domain.entities.study_session import (
+    DocumentBrief,
+    LearnerLevel,
+    LearningObjective,
+    StudyMode,
+)
 from scholar_agent.domain.value_objects.document_id import DocumentId
+from scholar_agent.domain.value_objects.source_reference import SourceReference
 from scholar_agent.infrastructure.adapters.scratch_gpt.scratch_gpt_adapter import (
     ScratchGPTAdapter,
 )
@@ -76,6 +95,7 @@ def _cases() -> tuple[EvaluationCase, ...]:
         chunk_id="99999999-8888-7777-6666-555555555555-0",
         ordinal=0,
     )
+    source_text = f"[{chunk.chunk_id}|page=7]\n{source}"
     planner_prompt = build_planner_prompt(
         "Summarize this document and make 2 flashcards.",
         STUDY_CAPABILITIES,
@@ -89,16 +109,16 @@ def _cases() -> tuple[EvaluationCase, ...]:
             _validate_planner,
         ),
         EvaluationCase(
-            "quiz",
-            quiz_prompt(source, 2),
+            "cited_quiz",
+            quiz_prompt(source_text, 2),
             280,
-            lambda output: _validate_items(output, "prompt", "answer", 2),
+            lambda output: _validate_cited_items(output, "prompt", "answer", chunk),
         ),
         EvaluationCase(
-            "flashcards",
-            flashcards_prompt(source, 2),
+            "cited_flashcards",
+            flashcards_prompt(source_text, 2),
             280,
-            lambda output: _validate_items(output, "front", "back", 2),
+            lambda output: _validate_cited_items(output, "front", "back", chunk),
         ),
         EvaluationCase(
             "document_brief",
@@ -107,10 +127,37 @@ def _cases() -> tuple[EvaluationCase, ...]:
             lambda output: _validate_brief(output, document_id, chunk),
         ),
         EvaluationCase(
-            "assessment",
-            _assessment_prompt(source),
+            "mission_plan",
+            build_mission_plan_prompt(
+                "Understand Bayesian inference",
+                LearnerLevel.INTERMEDIATE,
+                StudyMode.GUIDED,
+                20,
+                _mission_brief(document_id, chunk, source),
+            ),
+            220,
+            lambda output: _validate_mission_plan(
+                output, _mission_brief(document_id, chunk, source)
+            ),
+        ),
+        EvaluationCase(
+            "explanation",
+            explain_concept_prompt(
+                "objective-1", "How does the update work?", "concise", source_text
+            ),
+            260,
+            lambda output: _validate_explanation(output, chunk),
+        ),
+        EvaluationCase(
+            "mission_assessment",
+            assess_response_prompt(
+                "objective-1",
+                "Explain Bayesian inference.",
+                "It combines prior beliefs with observed evidence.",
+                source_text,
+            ),
             240,
-            _validate_assessment,
+            lambda output: _validate_mission_assessment(output, chunk),
         ),
         EvaluationCase(
             "verification",
@@ -130,15 +177,56 @@ def _validate_planner(output: str) -> None:
     assert actions[1]["arguments"]["card_count"] == 2
 
 
-def _validate_items(
+def _validate_cited_items(
     output: str,
     first_key: str,
     second_key: str,
-    count: int,
+    chunk: DocumentChunk,
 ) -> None:
-    items = parse_items(output, first_key, second_key)
-    assert len(items) == count
-    assert all(first and second for first, second in items)
+    items = parse_cited_items(output, first_key, second_key, (chunk,))
+    assert len(items) == 2
+    assert all(first and second and citations for first, second, citations in items)
+
+
+def _mission_brief(
+    document_id: DocumentId, chunk: DocumentChunk, source: str
+) -> DocumentBrief:
+    reference = SourceReference(document_id, chunk.chunk_id, chunk.page_number, source)
+    return DocumentBrief(
+        document_id=document_id,
+        synopsis="Bayesian inference updates beliefs with evidence.",
+        objectives=(
+            LearningObjective(
+                "objective-1",
+                "Explain Bayesian inference",
+                source,
+                (),
+                (reference,),
+            ),
+        ),
+        concepts=(),
+        glossary=(),
+        misconceptions=(),
+    )
+
+
+def _validate_mission_plan(output: str, brief: DocumentBrief) -> None:
+    focus, objective_ids = parse_mission_plan(output, brief)
+    assert focus
+    assert objective_ids == ("objective-1",)
+
+
+def _validate_explanation(output: str, chunk: DocumentChunk) -> None:
+    explanation, check_question, citations = parse_explanation(output, (chunk,))
+    assert explanation and check_question and citations
+
+
+def _validate_mission_assessment(output: str, chunk: DocumentChunk) -> None:
+    score, feedback, missing, next_question, citations = parse_assessment(
+        output, (chunk,)
+    )
+    assert 0 <= score <= 3
+    assert feedback and next_question and isinstance(missing, tuple) and citations
 
 
 def _validate_brief(

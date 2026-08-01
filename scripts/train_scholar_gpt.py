@@ -17,11 +17,26 @@ from scholar_agent.application.dtos.retrieval import DocumentChunk
 from scholar_agent.application.services.document_brief_parser import (
     document_brief_prompt,
 )
+from scholar_agent.application.services.mission_planning import (
+    build_mission_plan_prompt,
+)
+from scholar_agent.application.services.mission_prompts import (
+    assess_response_prompt,
+    explain_concept_prompt,
+)
 from scholar_agent.application.services.study_prompts import (
+    chunks_to_source_text,
     flashcards_prompt,
     quiz_prompt,
 )
+from scholar_agent.domain.entities.study_session import (
+    DocumentBrief,
+    LearnerLevel,
+    LearningObjective,
+    StudyMode,
+)
 from scholar_agent.domain.value_objects.document_id import DocumentId
+from scholar_agent.domain.value_objects.source_reference import SourceReference
 from scholar_agent.infrastructure.adapters.scratch_gpt.checkpoint import (
     load_checkpoint,
     save_checkpoint,
@@ -34,7 +49,9 @@ from scholar_agent.infrastructure.adapters.scratch_gpt.gpt_model import (
 from scholar_agent.infrastructure.adapters.study_agent_planning import (
     build_planner_prompt,
 )
-from scholar_agent.infrastructure.tools.capabilities import STUDY_CAPABILITIES
+from scholar_agent.infrastructure.tools.capabilities import (
+    STUDY_CAPABILITIES,
+)
 
 PROMPT_SUFFIX = "\n\nResponse:"
 CATEGORY_REPETITIONS = {
@@ -43,6 +60,9 @@ CATEGORY_REPETITIONS = {
     "flashcards": 3,
     "document_brief": 3,
     "assessment": 1,
+    "mission_plan": 5,
+    "explanation": 2,
+    "mission_assessment": 1,
     "verification": 1,
 }
 
@@ -185,16 +205,18 @@ def build_instruction_examples() -> tuple[InstructionExample, ...]:
         examples.extend(
             (
                 InstructionExample(
-                    quiz_prompt(source, 2),
+                    quiz_prompt(chunks_to_source_text((chunk,)), 2),
                     json.dumps(
                         [
                             {
                                 "prompt": f"What is {topic.name}?",
                                 "answer": topic.definition,
+                                "citations": [chunk_id],
                             },
                             {
                                 "prompt": f"Why is {topic.name} useful?",
                                 "answer": topic.purpose,
+                                "citations": [chunk_id],
                             },
                         ]
                     ),
@@ -202,13 +224,18 @@ def build_instruction_examples() -> tuple[InstructionExample, ...]:
                     validation,
                 ),
                 InstructionExample(
-                    flashcards_prompt(source, 2),
+                    flashcards_prompt(chunks_to_source_text((chunk,)), 2),
                     json.dumps(
                         [
-                            {"front": topic.name.title(), "back": topic.definition},
+                            {
+                                "front": topic.name.title(),
+                                "back": topic.definition,
+                                "citations": [chunk_id],
+                            },
                             {
                                 "front": f"Purpose of {topic.name}",
                                 "back": topic.purpose,
+                                "citations": [chunk_id],
                             },
                         ]
                     ),
@@ -246,8 +273,79 @@ def build_instruction_examples() -> tuple[InstructionExample, ...]:
                 ),
             )
         )
+        examples.extend(_mission_examples(topic, document_id, chunk_id, source))
     examples.extend(_planner_examples())
     return tuple(examples)
+
+
+def _mission_examples(
+    topic: Topic, document_id: DocumentId, chunk_id: str, source: str
+) -> tuple[InstructionExample, ...]:
+    reference = SourceReference(document_id, chunk_id, 1, source)
+    brief = DocumentBrief(
+        document_id=document_id,
+        synopsis=f"A cited overview of {topic.name}.",
+        objectives=(
+            LearningObjective(
+                identifier="objective-1",
+                title=f"Explain {topic.name}",
+                description=topic.definition,
+                prerequisite_ids=(),
+                citations=(reference,),
+            ),
+        ),
+        concepts=(),
+        glossary=(),
+        misconceptions=(),
+    )
+    cited_source = f"[{chunk_id}|page=1]\n{source}"
+    return (
+        InstructionExample(
+            build_mission_plan_prompt(
+                f"Understand {topic.name}",
+                LearnerLevel.INTERMEDIATE,
+                StudyMode.GUIDED,
+                20,
+                brief,
+            ),
+            json.dumps(
+                {
+                    "focus": f"Understand {topic.name}.",
+                    "objective_ids": ["objective-1"],
+                }
+            ),
+            "mission_plan",
+        ),
+        InstructionExample(
+            explain_concept_prompt("objective-1", None, "concise", cited_source),
+            json.dumps(
+                {
+                    "explanation": topic.definition,
+                    "check_question": f"What is one use of {topic.name}?",
+                    "citations": [chunk_id],
+                }
+            ),
+            "explanation",
+        ),
+        InstructionExample(
+            assess_response_prompt(
+                "objective-1",
+                f"Explain {topic.name}.",
+                topic.definition,
+                cited_source,
+            ),
+            json.dumps(
+                {
+                    "score": 3,
+                    "feedback": f"The response explains {topic.name} accurately.",
+                    "missing_concepts": [],
+                    "next_question": f"How is {topic.name} useful?",
+                    "citations": [chunk_id],
+                }
+            ),
+            "mission_assessment",
+        ),
+    )
 
 
 def _brief_response(topic: Topic, chunk_id: str) -> str:
@@ -553,7 +651,8 @@ def train(args: argparse.Namespace) -> None:
     random.seed(args.seed)
     torch.manual_seed(args.seed)
     torch.set_num_threads(args.threads)
-    device = torch.device("cpu")
+    device = _select_device(args.device)
+    print(f"Using device: {device}")
     tokenizer = GPT2Tokenizer.from_pretrained(
         "gpt2",
         local_files_only=args.offline,
@@ -713,6 +812,12 @@ def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", default="data/scholar_gpt.pt")
     parser.add_argument("--resume")
+    parser.add_argument(
+        "--device",
+        choices=("auto", "cpu", "cuda"),
+        default="auto",
+        help="Training device; auto selects CUDA when available.",
+    )
     parser.add_argument("--epochs", type=int, default=12)
     parser.add_argument("--maximum-minutes", type=float, default=42)
     parser.add_argument("--maximum-length", type=int, default=768)
@@ -725,6 +830,18 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--offline", action="store_true")
     return parser.parse_args()
+
+
+def _select_device(requested: str) -> torch.device:
+    """Resolve the requested training device with an actionable CUDA error."""
+    if requested == "auto":
+        requested = "cuda" if torch.cuda.is_available() else "cpu"
+    if requested == "cuda" and not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA was requested but is unavailable. Install a CUDA-enabled "
+            "PyTorch build and verify the NVIDIA driver."
+        )
+    return torch.device(requested)
 
 
 if __name__ == "__main__":

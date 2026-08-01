@@ -121,7 +121,14 @@ class FakeVectorStore:
 def test_quiz_use_case_caps_a_large_request_at_ten() -> None:
     llm = StructuredFakeLLM(
         json.dumps(
-            [{"prompt": f"Question {index}", "answer": "Answer"} for index in range(12)]
+            [
+                {
+                    "prompt": f"Question {index}",
+                    "answer": "Answer",
+                    "citations": ["chunk-1"],
+                }
+                for index in range(12)
+            ]
         )
     )
     use_case = GenerateQuizUseCase(
@@ -148,7 +155,14 @@ def test_quiz_use_case_caps_a_large_request_at_ten() -> None:
 def test_flashcard_use_case_caps_a_large_request_at_twenty() -> None:
     llm = StructuredFakeLLM(
         json.dumps(
-            [{"front": f"Concept {index}", "back": "Definition"} for index in range(25)]
+            [
+                {
+                    "front": f"Concept {index}",
+                    "back": "Definition",
+                    "citations": ["chunk-1"],
+                }
+                for index in range(25)
+            ]
         )
     )
     use_case = GenerateFlashcardsUseCase(

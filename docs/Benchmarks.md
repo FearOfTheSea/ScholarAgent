@@ -28,3 +28,14 @@ and three 128-token samples:
 
 The VRAM value comes from Ollama's local process-status API. The benchmark
 excludes its initial model-load warm-up and uses no remote inference service.
+
+## Mission profile
+
+Study Mission uses the same local model and retrieval stack, but keeps its
+workflow bounded: at most four automatic capability executions per advance and
+64 persisted actions per session. Mission evaluation is intentionally a
+contract and state-transition test rather than a latency claim; it verifies
+that citations, pending learner state, remediation, trace summaries, and resume
+behavior remain correct when a local provider is replaced by deterministic
+fakes. Run the opt-in real-model journeys from the repository README when
+measuring end-to-end response time on a target laptop.

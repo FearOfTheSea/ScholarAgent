@@ -13,6 +13,7 @@ from scholar_agent.application.dtos.agent import (
 from scholar_agent.application.dtos.retrieval import RetrievedChunk
 from scholar_agent.application.dtos.study_results import Flashcard, QuizQuestion
 from scholar_agent.domain.value_objects.document_id import DocumentId
+from scholar_agent.domain.value_objects.source_reference import SourceReference
 
 
 def task_result(
@@ -26,7 +27,10 @@ def task_result(
             citations=_citations(payload.get("citations")),
         )
     if task is StudyTask.SUMMARIZE_DOCUMENT:
-        return StudyAgentSummaryResult(summary=_required_text(payload, "summary"))
+        return StudyAgentSummaryResult(
+            summary=_required_text(payload, "summary"),
+            citations=_source_references(payload.get("citations")),
+        )
     if task is StudyTask.GENERATE_QUIZ:
         return StudyAgentQuizResult(
             questions=_quiz_questions(payload.get("questions")),
@@ -67,7 +71,13 @@ def _quiz_questions(value: object) -> tuple[QuizQuestion, ...]:
         answer = item.get("answer")
         if not isinstance(prompt, str) or not isinstance(answer, str):
             raise ValueError("Quiz question fields must be strings.")
-        questions.append(QuizQuestion(prompt=prompt, answer=answer))
+        questions.append(
+            QuizQuestion(
+                prompt=prompt,
+                answer=answer,
+                citations=_source_references(item.get("citations")),
+            )
+        )
     return tuple(questions)
 
 
@@ -82,7 +92,13 @@ def _flashcards(value: object) -> tuple[Flashcard, ...]:
         back = item.get("back")
         if not isinstance(front, str) or not isinstance(back, str):
             raise ValueError("Flashcard fields must be strings.")
-        cards.append(Flashcard(front=front, back=back))
+        cards.append(
+            Flashcard(
+                front=front,
+                back=back,
+                citations=_source_references(item.get("citations")),
+            )
+        )
     return tuple(cards)
 
 
@@ -119,3 +135,29 @@ def _citation(value: object) -> RetrievedChunk:
         chunk_id=chunk_id,
         similarity_score=float(similarity_score),
     )
+
+
+def _source_references(value: object) -> tuple[SourceReference, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError("Material citations must be a list.")
+    references: list[SourceReference] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise ValueError("Every material citation must be an object.")
+        document_id = item.get("document_id")
+        chunk_id = item.get("chunk_id")
+        page_number = item.get("page_number")
+        excerpt = item.get("excerpt")
+        if (
+            not isinstance(document_id, str)
+            or not isinstance(chunk_id, str)
+            or not isinstance(excerpt, str)
+            or (page_number is not None and not isinstance(page_number, int))
+        ):
+            raise ValueError("Material citation fields have invalid types.")
+        references.append(
+            SourceReference(DocumentId(document_id), chunk_id, page_number, excerpt)
+        )
+    return tuple(references)

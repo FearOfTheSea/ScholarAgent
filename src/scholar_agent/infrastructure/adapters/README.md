@@ -1,5 +1,6 @@
 # Adapters
 
-Adapters implement application output ports. The Phase 1 adapters are inert
-placeholders that establish replaceable seams without AI or retrieval behavior.
-
+Adapters implement application output ports. LangGraph adapters compile local
+workflow graphs, while graph nodes delegate mission policy, capability
+execution, assessment, persistence, and result construction to application
+services. Provider and framework details stay at this boundary.

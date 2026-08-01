@@ -67,6 +67,9 @@ def test_training_examples_cover_every_structured_contract() -> None:
         "flashcards",
         "document_brief",
         "assessment",
+        "mission_plan",
+        "explanation",
+        "mission_assessment",
         "verification",
     }
     assert any(item.validation for item in examples)

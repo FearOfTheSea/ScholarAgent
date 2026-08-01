@@ -2,7 +2,11 @@
 
 from abc import ABC, abstractmethod
 
-from scholar_agent.domain.entities.study_session import DocumentBrief, StudySession
+from scholar_agent.domain.entities.study_session import (
+    DocumentBrief,
+    MissionStatus,
+    StudySession,
+)
 from scholar_agent.domain.value_objects.document_id import DocumentId
 
 
@@ -16,6 +20,18 @@ class StudySessionRepository(ABC):
     @abstractmethod
     def get(self, session_id: str) -> StudySession | None:
         """Return a session when it exists."""
+
+    @abstractmethod
+    def list(
+        self,
+        document_id: DocumentId | None = None,
+        status: MissionStatus | None = None,
+    ) -> tuple[StudySession, ...]:
+        """Return sessions ordered from most recently updated to oldest."""
+
+    @abstractmethod
+    def complete(self, session_id: str) -> StudySession | None:
+        """Mark a session complete and return its updated state."""
 
     @abstractmethod
     def delete(self, session_id: str) -> bool:

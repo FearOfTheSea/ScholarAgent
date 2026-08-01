@@ -12,7 +12,7 @@ from scholar_agent.application.services.generation_count_policy import (
     GenerationCountPolicy,
     generation_limit_notice,
 )
-from scholar_agent.application.services.structured_output import parse_items
+from scholar_agent.application.services.structured_output import parse_cited_items
 from scholar_agent.application.services.study_prompts import (
     chunks_to_source_text,
     flashcards_prompt,
@@ -41,17 +41,32 @@ class GenerateFlashcardsUseCase(GenerateFlashcards):
         chunks = self._vector_store.list_document_chunks(request.document_id)
         if not chunks:
             raise DocumentNotFoundError(request.document_id.value)
-        raw_output = self._llm_provider.generate(
-            flashcards_prompt(chunks_to_source_text(chunks), count.effective),
-        )
+        prompt = flashcards_prompt(chunks_to_source_text(chunks), count.effective)
+        raw_output = self._llm_provider.generate(prompt)
+        try:
+            parsed = parse_cited_items(
+                raw_output,
+                "front",
+                "back",
+                chunks,
+            )
+        except ValueError as first_error:
+            repaired = self._llm_provider.generate(
+                f"{prompt}\nVALIDATION ERROR: {first_error}\n"
+                "Return only the corrected JSON array."
+            )
+            parsed = parse_cited_items(repaired, "front", "back", chunks)
         cards = tuple(
-            Flashcard(front=front, back=back)
-            for front, back in parse_items(raw_output, "front", "back")
+            Flashcard(front=front, back=back, citations=citations)
+            for front, back, citations in parsed
         )
+        citations = tuple(reference for card in cards for reference in card.citations)
+        citations = tuple(dict.fromkeys(citations))
         return GenerateFlashcardsResult(
             cards=cards[: count.effective],
             requested_count=count.requested,
             effective_count=count.effective,
             maximum_count=count.maximum,
             notice=generation_limit_notice("flashcards", count),
+            citations=citations,
         )

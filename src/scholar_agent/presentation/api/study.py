@@ -22,6 +22,7 @@ from scholar_agent.domain.exceptions.document_not_found_error import (
     DocumentNotFoundError,
 )
 from scholar_agent.domain.value_objects.document_id import DocumentId
+from scholar_agent.domain.value_objects.source_reference import SourceReference
 from scholar_agent.infrastructure.di.container import Container
 from scholar_agent.presentation.api.dependencies import get_container
 from scholar_agent.presentation.api.models import (
@@ -46,6 +47,7 @@ from scholar_agent.presentation.api.models import (
     PrepareStudySessionRequestModel,
     PrepareStudySessionResponse,
     QuizQuestionResponse,
+    SourceReferenceResponse,
     SummarizeDocumentResponse,
 )
 from scholar_agent.presentation.api.serializers import citation_response
@@ -142,7 +144,10 @@ def summarize_document(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)
         ) from error
-    return SummarizeDocumentResponse(summary=result.summary)
+    return SummarizeDocumentResponse(
+        summary=result.summary,
+        citations=[_source_reference_response(item) for item in result.citations],
+    )
 
 
 @router.post(
@@ -173,7 +178,11 @@ def generate_quiz(
         ) from error
     return GenerateQuizResponse(
         questions=[
-            QuizQuestionResponse(prompt=item.prompt, answer=item.answer)
+            QuizQuestionResponse(
+                prompt=item.prompt,
+                answer=item.answer,
+                citations=[_source_reference_response(ref) for ref in item.citations],
+            )
             for item in result.questions
         ],
         requested_count=result.requested_count,
@@ -212,7 +221,12 @@ def generate_flashcards(
         ) from error
     return GenerateFlashcardsResponse(
         cards=[
-            FlashcardResponse(front=item.front, back=item.back) for item in result.cards
+            FlashcardResponse(
+                front=item.front,
+                back=item.back,
+                citations=[_source_reference_response(ref) for ref in item.citations],
+            )
+            for item in result.cards
         ],
         requested_count=result.requested_count,
         effective_count=result.effective_count,
@@ -272,12 +286,19 @@ def _result_response(result: StudyAgentTaskResult) -> AgentResultResponse:
         return AgentSummaryResultResponse(
             task="summarize_document",
             summary=result.summary,
+            citations=[_source_reference_response(ref) for ref in result.citations],
         )
     if isinstance(result, StudyAgentQuizResult):
         return AgentQuizResultResponse(
             task="generate_quiz",
             questions=[
-                QuizQuestionResponse(prompt=item.prompt, answer=item.answer)
+                QuizQuestionResponse(
+                    prompt=item.prompt,
+                    answer=item.answer,
+                    citations=[
+                        _source_reference_response(ref) for ref in item.citations
+                    ],
+                )
                 for item in result.questions
             ],
             requested_count=result.requested_count,
@@ -288,7 +309,12 @@ def _result_response(result: StudyAgentTaskResult) -> AgentResultResponse:
     return AgentFlashcardsResultResponse(
         task="generate_flashcards",
         cards=[
-            FlashcardResponse(front=item.front, back=item.back) for item in result.cards
+            FlashcardResponse(
+                front=item.front,
+                back=item.back,
+                citations=[_source_reference_response(ref) for ref in item.citations],
+            )
+            for item in result.cards
         ],
         requested_count=result.requested_count,
         effective_count=result.effective_count,
@@ -341,4 +367,15 @@ def _legacy_agent_response(
         notices=list(result.notices),
         status=result.status.value,
         message=result.message,
+    )
+
+
+def _source_reference_response(
+    reference: SourceReference,
+) -> SourceReferenceResponse:
+    return SourceReferenceResponse(
+        document_id=reference.document_id.value,
+        chunk_id=reference.chunk_id,
+        page_number=reference.page_number,
+        excerpt=reference.excerpt,
     )

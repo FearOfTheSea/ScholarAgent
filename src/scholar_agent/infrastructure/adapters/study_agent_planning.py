@@ -229,6 +229,12 @@ def _validate_argument_value(
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"'{definition.name}' must be non-blank text.")
         return value.strip()
+    if definition.kind is ToolArgumentKind.STRING_ARRAY:
+        if not isinstance(value, list) or not all(
+            isinstance(item, str) and item.strip() for item in value
+        ):
+            raise ValueError(f"'{definition.name}' must be a non-empty string array.")
+        return [item.strip() for item in value]
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(f"'{definition.name}' must be a positive integer.")
     return value

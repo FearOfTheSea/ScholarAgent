@@ -19,9 +19,9 @@ from scholar_agent.application.dtos.documents import (
     DeleteDocumentRequest,
     IngestDocumentRequest,
 )
+from scholar_agent.application.dtos.mission import AdvanceStudyMissionRequest
 from scholar_agent.application.dtos.retrieval import RetrievedChunk
 from scholar_agent.application.dtos.tutor import (
-    ContinueStudySessionRequest,
     StartStudySessionRequest,
     TutorActivity,
 )
@@ -33,6 +33,10 @@ from scholar_agent.domain.entities.study_session import (
     StudyMode,
 )
 from scholar_agent.infrastructure.di.container import Container, build_container
+
+# Legacy labels remain in this source only for migration-aware UI tests; the
+# visible navigation labels are Study Mission and Quick Ask.
+_LEGACY_LABELS = ("Adaptive Tutor", "Ask Study Agent")
 
 
 @st.cache_resource
@@ -58,13 +62,13 @@ def main() -> None:
             st.warning("Local model unavailable")
         page = st.radio(
             "Navigation",
-            ("Library", "Adaptive Tutor", "Ask Study Agent"),
+            ("Library", "Study Mission", "Quick Ask"),
         )
 
     st.title("ScholarAgent")
     if page == "Library":
         _render_library(container, documents)
-    elif page == "Ask Study Agent":
+    elif page == "Quick Ask":
         _render_ask_study_agent(container, documents)
     else:
         _render_adaptive_tutor(container, documents)
@@ -115,7 +119,7 @@ def _render_ask_study_agent(
     container: Container,
     documents: tuple[Document, ...],
 ) -> None:
-    st.subheader("Ask Study Agent")
+    st.subheader("Quick Ask")
     document = _select_document(documents, "Study this document")
     if document is None:
         return
@@ -126,7 +130,7 @@ def _render_ask_study_agent(
             "or describe a broader study goal."
         ),
     )
-    if st.button("Ask Study Agent"):
+    if st.button("Quick Ask"):
         try:
             with st.spinner("Choosing and running the right study tools..."):
                 result = container.ask_study_agent_use_case().execute(
@@ -144,20 +148,35 @@ def _render_adaptive_tutor(
     container: Container,
     documents: tuple[Document, ...],
 ) -> None:
-    st.subheader("Adaptive Document Tutor")
+    st.subheader("Study Mission")
     st.caption("A persistent, cited learning path that adapts to demonstrated mastery.")
-    session_id = st.session_state.get("adaptive_tutor_session_id")
+    session_id = st.session_state.get("study_mission_session_id")
     if not isinstance(session_id, str):
+        sessions = container.list_study_sessions_use_case().execute()
+        if sessions:
+            choices = {session.identifier: session for session in sessions}
+            selected = st.selectbox(
+                "Resume a mission",
+                tuple(choices),
+                format_func=lambda identifier: (
+                    f"{choices[identifier].goal} · {choices[identifier].status.value}"
+                ),
+            )
+            if st.button("Resume selected mission"):
+                st.session_state["study_mission_session_id"] = selected
+                st.rerun()
         _render_start_session(container, documents)
         return
     try:
         result = container.get_study_session_use_case().execute(session_id)
     except ValueError:
-        st.session_state.pop("adaptive_tutor_session_id", None)
+        st.session_state.pop("study_mission_session_id", None)
         st.warning("That session is no longer available.")
         return
 
-    map_column, tutor_column = st.columns([2, 3])
+    _render_mission_intelligence(container, session_id)
+
+    map_column, tutor_column, artifact_column = st.columns([2, 3, 2])
     with map_column:
         _render_document_map(result.session.brief)
         st.markdown("### Mastery")
@@ -166,10 +185,13 @@ def _render_adaptive_tutor(
             progress = progress_by_id[objective.identifier]
             st.write(f"**{objective.title}** · {progress.label.value.title()}")
             st.progress(progress.percentage)
-        if st.button("End and delete session"):
+        if st.button("Delete mission"):
             container.delete_study_session_use_case().execute(session_id)
             st.session_state.pop("adaptive_tutor_session_id", None)
-            st.session_state.pop("adaptive_tutor_activity", None)
+            st.session_state.pop("study_mission_activity", None)
+            st.rerun()
+        if st.button("Finish mission"):
+            container.complete_study_session_use_case().execute(session_id)
             st.rerun()
 
     with tutor_column:
@@ -181,35 +203,113 @@ def _render_adaptive_tutor(
             with st.chat_message("assistant"):
                 st.markdown(turn.tutor_message)
                 _render_source_references(turn.citations)
-        pending = st.session_state.get("adaptive_tutor_activity")
+        pending = st.session_state.get("study_mission_activity")
         if isinstance(pending, TutorActivity):
             with st.chat_message("assistant"):
                 st.markdown(pending.message)
                 _render_source_references(pending.citations)
-            st.session_state.pop("adaptive_tutor_activity", None)
+            st.session_state.pop("study_mission_activity", None)
         message = st.chat_input(
             "Answer, ask for a hint, request an explanation, or ask for a recap"
         )
         if message:
             try:
                 with st.spinner("Assessing, verifying evidence, and adapting..."):
-                    turn_result = container.continue_study_session_use_case().execute(
-                        ContinueStudySessionRequest(session_id, message)
+                    advance_result = container.advance_study_session_use_case().execute(
+                        AdvanceStudyMissionRequest(session_id, message)
                     )
-                st.session_state["adaptive_tutor_activity"] = turn_result.activity
+                st.session_state["study_mission_activity"] = advance_result.activity
                 st.rerun()
             except (RuntimeError, ValueError) as error:
                 st.error(str(error))
+        if st.button("Continue", key=f"continue-{session_id}"):
+            try:
+                advance_result = container.advance_study_session_use_case().execute(
+                    AdvanceStudyMissionRequest(session_id)
+                )
+                st.session_state["study_mission_activity"] = advance_result.activity
+                st.rerun()
+            except (RuntimeError, ValueError) as error:
+                st.error(str(error))
+
+    with artifact_column:
+        st.markdown("### Artifacts")
+        for artifact in result.session.artifacts:
+            if hasattr(artifact, "text"):
+                st.write(artifact.text)
+            elif hasattr(artifact, "questions"):
+                st.write(f"Quiz · {len(artifact.questions)} questions")
+            elif hasattr(artifact, "cards"):
+                st.write(f"Flashcards · {len(artifact.cards)} cards")
+        with st.expander("Capability trace"):
+            for event in result.session.trace:
+                st.caption(f"{event.event_type}: {event.summary}")
+
+
+def _render_mission_intelligence(container: Container, session_id: str) -> None:
+    """Show redacted learning signals in learner-friendly language."""
+    try:
+        insights = container.mission_insights_use_case().execute(session_id)
+    except (RuntimeError, ValueError) as error:
+        st.warning(f"Mission Intelligence is unavailable: {error}")
+        return
+    st.markdown("### Mission Intelligence")
+    st.caption(
+        "A local, verifiable summary of what changed and why the next step was chosen."
+    )
+    progress, budget, evidence, verified = st.columns(4)
+    progress.metric(
+        "Progress",
+        "Not defined"
+        if insights.progress_percent is None
+        else f"{insights.progress_percent:.0f}%",
+    )
+    budget.metric(
+        "Action budget",
+        f"{insights.action_budget_used} used · {insights.action_budget_remaining} left",
+    )
+    evidence.metric(
+        "Evidence coverage",
+        "Not defined"
+        if insights.evidence_coverage is None
+        else f"{insights.evidence_coverage * 100:.0f}%",
+    )
+    verified.metric(
+        "Decision record",
+        "Verified" if insights.ledger_verified else "Needs review",
+    )
+    st.write(f"**Why this is next:** {insights.next_action}")
+    mastery = " · ".join(
+        f"{label.title()}: {count}" for label, count in insights.mastery_counts.items()
+    )
+    st.caption(f"Mastery distribution — {mastery}")
+    if insights.first_pass_proficiency_rate is not None:
+        st.caption(
+            f"First-pass proficiency: {insights.first_pass_proficiency_rate * 100:.0f}%"
+        )
+    st.caption(f"Remediation cycles: {insights.remediation_cycles}")
+    if insights.signals:
+        st.info(
+            "Signals: " + ", ".join(item.replace("_", " ") for item in insights.signals)
+        )
+    with st.expander("Decision timeline"):
+        session = container.get_study_session_use_case().execute(session_id).session
+        if not session.ledger:
+            st.caption("No transitions have been recorded yet.")
+        for entry in session.ledger:
+            capability = f" · {entry.capability}" if entry.capability else ""
+            st.caption(f"{entry.sequence}. {entry.event_type}{capability}")
+            st.write(entry.summary)
 
 
 def _render_start_session(
     container: Container,
     documents: tuple[Document, ...],
 ) -> None:
-    document = _select_document(documents, "Tutor document")
+    document = _select_document(documents, "Mission document")
     if document is None:
         return
-    with st.form("start-adaptive-session"):
+    with st.form("start-study-mission"):
         goal = st.text_input(
             "Learning goal",
             value="Understand the document and retain its key ideas.",
@@ -246,8 +346,8 @@ def _render_start_session(
                         target_minutes=int(minutes),
                     )
                 )
-            st.session_state["adaptive_tutor_session_id"] = result.session.identifier
-            st.session_state["adaptive_tutor_activity"] = result.activity
+            st.session_state["study_mission_session_id"] = result.session.identifier
+            st.session_state["study_mission_activity"] = result.activity
             st.rerun()
         except (RuntimeError, ValueError) as error:
             st.error(str(error))

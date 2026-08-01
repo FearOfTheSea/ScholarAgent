@@ -6,6 +6,19 @@ from datetime import datetime
 from pathlib import Path
 from threading import RLock
 
+from scholar_agent.domain.entities.mission_ledger import (
+    MissionLedgerEntry,
+    MissionLedgerEventType,
+    MissionStateProjection,
+    verify_ledger,
+)
+from scholar_agent.domain.entities.study_material import (
+    Flashcard,
+    FlashcardArtifact,
+    QuizArtifact,
+    QuizQuestion,
+    SummaryArtifact,
+)
 from scholar_agent.domain.entities.study_session import (
     ConceptNode,
     DocumentBrief,
@@ -13,8 +26,16 @@ from scholar_agent.domain.entities.study_session import (
     LearnerAttempt,
     LearnerLevel,
     LearningObjective,
+    MilestoneKind,
+    MilestoneStatus,
+    MissionStatus,
+    MissionTraceEvent,
+    PendingLearnerInteraction,
     SourceReference,
+    StudyArtifact,
+    StudyMilestone,
     StudyMode,
+    StudyPlan,
     StudySession,
     TutorTurn,
     TutorTurnKind,
@@ -70,6 +91,43 @@ class SQLiteStudySessionRepository(StudySessionRepository):
         if not isinstance(payload, dict):
             raise RuntimeError("Stored study session is invalid.")
         return _session_from_payload(payload)
+
+    def list(
+        self,
+        document_id: DocumentId | None = None,
+        status: MissionStatus | None = None,
+    ) -> tuple[StudySession, ...]:
+        """Return sessions ordered by updated timestamp descending."""
+        clauses: list[str] = []
+        values: list[str] = []
+        if document_id is not None:
+            clauses.append("document_id = ?")
+            values.append(document_id.value)
+        query = "SELECT payload FROM study_sessions"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY updated_at DESC"
+        with self._lock:
+            rows = self._connection.execute(query, values).fetchall()
+        sessions = tuple(
+            _session_from_payload(json.loads(str(row["payload"]))) for row in rows
+        )
+        if status is None:
+            return sessions
+        return tuple(session for session in sessions if session.status is status)
+
+    def complete(self, session_id: str) -> StudySession | None:
+        """Mark one session complete without discarding its history."""
+        from scholar_agent.application.services.mission_state import (
+            MissionStateService,
+        )
+
+        session = self.get(session_id)
+        if session is None:
+            return None
+        return MissionStateService(self).complete(
+            session, "Learner manually completed the mission."
+        )
 
     def delete(self, session_id: str) -> bool:
         """Delete a session and report whether it existed."""
@@ -315,6 +373,7 @@ def _turn_from_payload(payload: object) -> TutorTurn:
 
 def _session_payload(session: StudySession) -> dict[str, object]:
     return {
+        "schema_version": 3,
         "identifier": session.identifier,
         "document_id": session.document_id.value,
         "goal": session.goal,
@@ -326,18 +385,80 @@ def _session_payload(session: StudySession) -> dict[str, object]:
         "turns": [_turn_payload(item) for item in session.turns],
         "created_at": session.created_at.isoformat(),
         "updated_at": session.updated_at.isoformat(),
+        "status": session.status.value,
+        "plan": _plan_payload(session.plan),
+        "milestones": [_milestone_payload(item) for item in session.milestones],
+        "artifacts": [_artifact_payload(item) for item in session.artifacts],
+        "pending_interaction": _pending_payload(session.pending_interaction),
+        "trace": [_trace_payload(item) for item in session.trace],
+        "ledger": [_ledger_payload(item) for item in session.ledger],
+        "action_count": session.action_count,
+        "completed_at": (
+            session.completed_at.isoformat()
+            if session.completed_at is not None
+            else None
+        ),
     }
 
 
 def _session_from_payload(payload: dict[str, object]) -> StudySession:
+    schema_version = payload.get("schema_version", 1)
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version not in (1, 2, 3)
+    ):
+        raise RuntimeError("Stored study session has an unsupported schema version.")
+    is_v1 = schema_version == 1
+    is_v3 = schema_version == 3
+    document_id = DocumentId(_string(payload, "document_id"))
+    brief = _brief_from_payload(_mapping(payload.get("brief")))
+    milestones = (
+        _legacy_milestones(brief)
+        if is_v1
+        else tuple(
+            _milestone_from_payload(item)
+            for item in _objects(payload.get("milestones", []))
+        )
+    )
+    raw_status = payload.get("status")
+    status = (
+        MissionStatus.ACTIVE
+        if is_v1
+        else MissionStatus(_string_value(raw_status, "status"))
+    )
+    completed_at = payload.get("completed_at")
+    ledger = (
+        tuple(
+            _ledger_from_payload(item) for item in _objects(payload.get("ledger", []))
+        )
+        if is_v3
+        else ()
+    )
+    if is_v3:
+        if any(
+            reference.document_id != document_id
+            for entry in ledger
+            for reference in entry.citations
+        ):
+            raise RuntimeError(
+                "Stored study session ledger contains another document's citation."
+            )
+        verification = verify_ledger(ledger)
+        if not verification.valid:
+            detail = verification.reason or "Ledger verification failed."
+            raise RuntimeError(
+                f"Stored study session ledger is invalid at sequence "
+                f"{verification.sequence}: {detail}"
+            )
     return StudySession(
         identifier=_string(payload, "identifier"),
-        document_id=DocumentId(_string(payload, "document_id")),
+        document_id=document_id,
         goal=_string(payload, "goal"),
         learner_level=LearnerLevel(_string(payload, "learner_level")),
         mode=StudyMode(_string(payload, "mode")),
         target_minutes=_integer(payload, "target_minutes"),
-        brief=_brief_from_payload(_mapping(payload.get("brief"))),
+        brief=brief,
         attempts=tuple(
             _attempt_from_payload(item) for item in _objects(payload.get("attempts"))
         ),
@@ -346,7 +467,361 @@ def _session_from_payload(payload: dict[str, object]) -> StudySession:
         ),
         created_at=_datetime(payload, "created_at"),
         updated_at=_datetime(payload, "updated_at"),
+        status=status,
+        plan=None if is_v1 else _plan_from_payload(payload.get("plan")),
+        milestones=milestones,
+        artifacts=(
+            ()
+            if is_v1
+            else tuple(
+                _artifact_from_payload(item)
+                for item in _objects(payload.get("artifacts", []))
+            )
+        ),
+        pending_interaction=(
+            None if is_v1 else _pending_from_payload(payload.get("pending_interaction"))
+        ),
+        trace=(
+            ()
+            if is_v1
+            else tuple(
+                _trace_from_payload(item) for item in _objects(payload.get("trace", []))
+            )
+        ),
+        ledger=ledger,
+        action_count=(
+            0 if is_v1 else _optional_nonnegative_integer(payload.get("action_count"))
+        ),
+        completed_at=(
+            None
+            if completed_at is None
+            else datetime.fromisoformat(_string_value(completed_at, "completed_at"))
+        ),
     )
+
+
+def _ledger_payload(entry: MissionLedgerEntry) -> dict[str, object]:
+    return {
+        "sequence": entry.sequence,
+        "event_type": (
+            entry.event_type.value
+            if isinstance(entry.event_type, MissionLedgerEventType)
+            else entry.event_type
+        ),
+        "summary": entry.summary,
+        "objective_id": entry.objective_id,
+        "capability": entry.capability,
+        "citations": [_reference_payload(item) for item in entry.citations],
+        "projection": _projection_payload(entry.projection),
+        "previous_digest": entry.previous_digest,
+        "current_digest": entry.current_digest,
+        "created_at": entry.created_at.isoformat(),
+        "transition_key": entry.transition_key,
+    }
+
+
+def _ledger_from_payload(payload: object) -> MissionLedgerEntry:
+    item = _mapping(payload)
+    objective_id = item.get("objective_id")
+    capability = item.get("capability")
+    transition_key = item.get("transition_key")
+    return MissionLedgerEntry(
+        sequence=_integer(item, "sequence"),
+        event_type=MissionLedgerEventType(_string(item, "event_type")),
+        summary=_string(item, "summary"),
+        objective_id=str(objective_id) if objective_id is not None else None,
+        capability=str(capability) if capability is not None else None,
+        citations=tuple(
+            _reference_from_payload(reference)
+            for reference in _objects(item.get("citations", []))
+        ),
+        projection=_projection_from_payload(item.get("projection")),
+        previous_digest=_string(item, "previous_digest"),
+        current_digest=_string(item, "current_digest"),
+        created_at=_datetime(item, "created_at"),
+        transition_key=(str(transition_key) if transition_key is not None else None),
+    )
+
+
+def _projection_payload(projection: MissionStateProjection) -> dict[str, object]:
+    return {
+        "status": projection.status,
+        "active_milestone_id": projection.active_milestone_id,
+        "pending_objective_id": projection.pending_objective_id,
+        "action_count": projection.action_count,
+        "attempt_count": projection.attempt_count,
+        "artifact_count": projection.artifact_count,
+        "completed_milestone_count": projection.completed_milestone_count,
+        "mastery_by_objective": [
+            {"objective_id": objective_id, "label": label}
+            for objective_id, label in projection.mastery_by_objective
+        ],
+        "next_milestone_id": projection.next_milestone_id,
+    }
+
+
+def _projection_from_payload(value: object) -> MissionStateProjection:
+    item = _mapping(value)
+    mastery = tuple(
+        (
+            _string(master, "objective_id"),
+            _string(master, "label"),
+        )
+        for master in _objects(item.get("mastery_by_objective", []))
+    )
+    active = item.get("active_milestone_id")
+    pending = item.get("pending_objective_id")
+    next_milestone = item.get("next_milestone_id")
+    return MissionStateProjection(
+        status=_string(item, "status"),
+        active_milestone_id=str(active) if active is not None else None,
+        pending_objective_id=str(pending) if pending is not None else None,
+        action_count=_integer(item, "action_count"),
+        attempt_count=_integer(item, "attempt_count"),
+        artifact_count=_integer(item, "artifact_count"),
+        completed_milestone_count=_integer(item, "completed_milestone_count"),
+        mastery_by_objective=mastery,
+        next_milestone_id=(str(next_milestone) if next_milestone is not None else None),
+    )
+
+
+def _plan_payload(plan: StudyPlan | None) -> dict[str, object] | None:
+    if plan is None:
+        return None
+    return {
+        "focus": plan.focus,
+        "objective_ids": list(plan.objective_ids),
+        "citations": [_reference_payload(item) for item in plan.citations],
+    }
+
+
+def _plan_from_payload(value: object) -> StudyPlan | None:
+    if value is None:
+        return None
+    item = _mapping(value)
+    return StudyPlan(
+        focus=_string(item, "focus"),
+        objective_ids=_strings(item.get("objective_ids")),
+        citations=tuple(
+            _reference_from_payload(reference)
+            for reference in _objects(item.get("citations", []))
+        ),
+    )
+
+
+def _milestone_payload(milestone: StudyMilestone) -> dict[str, object]:
+    return {
+        "id": milestone.identifier,
+        "kind": milestone.kind.value,
+        "title": milestone.title,
+        "objective_id": milestone.objective_id,
+        "capability": milestone.capability,
+        "status": milestone.status.value,
+        "citations": [_reference_payload(item) for item in milestone.citations],
+    }
+
+
+def _milestone_from_payload(payload: object) -> StudyMilestone:
+    item = _mapping(payload)
+    objective_id = item.get("objective_id")
+    return StudyMilestone(
+        identifier=_string(item, "id"),
+        kind=MilestoneKind(_string(item, "kind")),
+        title=_string(item, "title"),
+        objective_id=(str(objective_id) if objective_id is not None else None),
+        capability=_string(item, "capability"),
+        status=MilestoneStatus(_string(item, "status")),
+        citations=tuple(
+            _reference_from_payload(reference)
+            for reference in _objects(item.get("citations", []))
+        ),
+    )
+
+
+def _legacy_milestones(brief: DocumentBrief) -> tuple[StudyMilestone, ...]:
+    milestones: list[StudyMilestone] = [
+        StudyMilestone(
+            identifier="milestone-orient",
+            kind=MilestoneKind.ORIENT,
+            title="Orient in the document",
+            objective_id=None,
+            capability="build_document_map",
+            status=MilestoneStatus.ACTIVE,
+            citations=(),
+        )
+    ]
+    for objective in brief.objectives:
+        milestones.extend(
+            (
+                StudyMilestone(
+                    identifier=f"milestone-learn-{objective.identifier}",
+                    kind=MilestoneKind.LEARN,
+                    title=objective.title,
+                    objective_id=objective.identifier,
+                    capability="explain_concept",
+                    citations=objective.citations,
+                ),
+                StudyMilestone(
+                    identifier=f"milestone-practice-{objective.identifier}",
+                    kind=MilestoneKind.PRACTICE,
+                    title=f"Practice {objective.title}",
+                    objective_id=objective.identifier,
+                    capability="assess_learner_response",
+                    citations=objective.citations,
+                ),
+            )
+        )
+    milestones.append(
+        StudyMilestone(
+            identifier="milestone-review",
+            kind=MilestoneKind.REVIEW,
+            title="Review and recap",
+            objective_id=None,
+            capability="generate_quiz",
+            citations=(),
+        )
+    )
+    return tuple(milestones)
+
+
+def _pending_payload(
+    interaction: PendingLearnerInteraction | None,
+) -> dict[str, object] | None:
+    if interaction is None:
+        return None
+    return {
+        "objective_id": interaction.objective_id,
+        "question": interaction.question,
+        "capability": interaction.capability,
+        "reference_answer": interaction.reference_answer,
+        "citations": [_reference_payload(item) for item in interaction.citations],
+        "attempts": interaction.attempts,
+    }
+
+
+def _pending_from_payload(value: object) -> PendingLearnerInteraction | None:
+    if value is None:
+        return None
+    item = _mapping(value)
+    reference_answer = item.get("reference_answer")
+    return PendingLearnerInteraction(
+        objective_id=_string(item, "objective_id"),
+        question=_string(item, "question"),
+        capability=_string(item, "capability"),
+        reference_answer=(
+            str(reference_answer) if reference_answer is not None else None
+        ),
+        citations=tuple(
+            _reference_from_payload(reference)
+            for reference in _objects(item.get("citations", []))
+        ),
+        attempts=_optional_nonnegative_integer(item.get("attempts")),
+    )
+
+
+def _trace_payload(event: MissionTraceEvent) -> dict[str, object]:
+    return {
+        "event_type": event.event_type,
+        "summary": event.summary,
+        "capability": event.capability,
+        "state": event.state,
+        "created_at": event.created_at.isoformat(),
+    }
+
+
+def _trace_from_payload(payload: object) -> MissionTraceEvent:
+    item = _mapping(payload)
+    capability = item.get("capability")
+    state = item.get("state")
+    return MissionTraceEvent(
+        event_type=_string(item, "event_type"),
+        summary=_string(item, "summary"),
+        capability=str(capability) if capability is not None else None,
+        state=str(state) if state is not None else None,
+        created_at=_datetime(item, "created_at"),
+    )
+
+
+def _artifact_payload(artifact: object) -> dict[str, object]:
+    if isinstance(artifact, SummaryArtifact):
+        return {
+            "kind": "summary",
+            "text": artifact.text,
+            "citations": [_reference_payload(item) for item in artifact.citations],
+            "created_at": artifact.created_at.isoformat(),
+        }
+    if isinstance(artifact, QuizArtifact):
+        return {
+            "kind": "quiz",
+            "questions": [
+                {
+                    "prompt": item.prompt,
+                    "answer": item.answer,
+                    "citations": [
+                        _reference_payload(reference) for reference in item.citations
+                    ],
+                }
+                for item in artifact.questions
+            ],
+            "citations": [_reference_payload(item) for item in artifact.citations],
+            "created_at": artifact.created_at.isoformat(),
+        }
+    if isinstance(artifact, FlashcardArtifact):
+        return {
+            "kind": "flashcards",
+            "cards": [
+                {
+                    "front": item.front,
+                    "back": item.back,
+                    "citations": [
+                        _reference_payload(reference) for reference in item.citations
+                    ],
+                }
+                for item in artifact.cards
+            ],
+            "citations": [_reference_payload(item) for item in artifact.citations],
+            "created_at": artifact.created_at.isoformat(),
+        }
+    raise RuntimeError("Stored study artifact has an unsupported type.")
+
+
+def _artifact_from_payload(payload: object) -> StudyArtifact:
+    item = _mapping(payload)
+    kind = _string(item, "kind")
+    citations = tuple(
+        _reference_from_payload(reference)
+        for reference in _objects(item.get("citations", []))
+    )
+    created_at = datetime.fromisoformat(_string(item, "created_at"))
+    if kind == "summary":
+        return SummaryArtifact(_string(item, "text"), citations, created_at)
+    if kind == "quiz":
+        questions = tuple(
+            QuizQuestion(
+                prompt=_string(question, "prompt"),
+                answer=_string(question, "answer"),
+                citations=tuple(
+                    _reference_from_payload(reference)
+                    for reference in _objects(question.get("citations", []))
+                ),
+            )
+            for question in _objects(item.get("questions", []))
+        )
+        return QuizArtifact(questions, citations, created_at)
+    if kind == "flashcards":
+        cards = tuple(
+            Flashcard(
+                front=_string(card, "front"),
+                back=_string(card, "back"),
+                citations=tuple(
+                    _reference_from_payload(reference)
+                    for reference in _objects(card.get("citations", []))
+                ),
+            )
+            for card in _objects(item.get("cards", []))
+        )
+        return FlashcardArtifact(cards, citations, created_at)
+    raise RuntimeError(f"Stored study artifact kind '{kind}' is unsupported.")
 
 
 def _mapping(value: object) -> dict[str, object]:
@@ -391,3 +866,15 @@ def _optional_integer(value: object) -> int | None:
 
 def _datetime(payload: dict[str, object], key: str) -> datetime:
     return datetime.fromisoformat(_string(payload, key))
+
+
+def _string_value(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise RuntimeError(f"Stored study field '{field}' must be text.")
+    return value
+
+
+def _optional_nonnegative_integer(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise RuntimeError("Stored study count must be a non-negative integer.")
+    return value

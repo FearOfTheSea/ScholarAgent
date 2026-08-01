@@ -49,9 +49,17 @@ def _optional_positive_int(
 
 
 def _document_ids(arguments: Mapping[str, object]) -> tuple[DocumentId, ...]:
-    raw_document_ids = arguments.get("document_ids", [])
+    raw_document_id = arguments.get("document_id")
+    if isinstance(raw_document_id, str) and raw_document_id.strip():
+        return (DocumentId(raw_document_id.strip()),)
+    raw_document_ids = arguments.get("document_ids")
+    if raw_document_ids is None:
+        raise ValueError("'document_id' is required for semantic search.")
     if not isinstance(raw_document_ids, list) or not all(
-        isinstance(document_id, str) for document_id in raw_document_ids
+        isinstance(document_id, str) and document_id.strip()
+        for document_id in raw_document_ids
     ):
         raise ValueError("'document_ids' must be a list of strings.")
-    return tuple(DocumentId(document_id) for document_id in raw_document_ids)
+    if not raw_document_ids:
+        raise ValueError("'document_ids' must contain at least one document.")
+    return tuple(DocumentId(document_id.strip()) for document_id in raw_document_ids)

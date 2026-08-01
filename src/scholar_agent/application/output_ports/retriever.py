@@ -13,7 +13,7 @@ class IRetriever(ABC):
     def retrieve(
         self,
         query: str,
-        limit: int = 5,
+        limit: int | None = None,
         document_ids: tuple[DocumentId, ...] = (),
     ) -> tuple[RetrievedChunk, ...]:
         """Return up to ``limit`` chunks relevant to a query."""

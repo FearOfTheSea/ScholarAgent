@@ -12,6 +12,7 @@ from scholar_agent.application.dtos.tutor import (
 )
 from scholar_agent.application.output_ports.llm_provider import ILLMProvider
 from scholar_agent.application.output_ports.retriever import IRetriever
+from scholar_agent.application.services.mission_state import MissionStateService
 from scholar_agent.domain.entities.study_session import (
     LearnerAttempt,
     LearningObjective,
@@ -44,10 +45,12 @@ class TutorTurnService:
         llm_provider: ILLMProvider,
         retriever: IRetriever,
         session_repository: StudySessionRepository,
+        state_service: MissionStateService | None = None,
     ) -> None:
         self._llm_provider = llm_provider
         self._retriever = retriever
         self._session_repository = session_repository
+        self._state = state_service or MissionStateService(session_repository)
 
     def classify(self, request: ContinueStudySessionRequest) -> str:
         """Classify a turn with transparent, deterministic rules."""
@@ -152,7 +155,18 @@ class TutorTurnService:
 
     def persist(self, prepared: PreparedTutorTurn) -> TutorTurnResult:
         """Persist a prepared turn and expose its typed result."""
-        self._session_repository.save(prepared.session)
+        event_type = "assessment" if prepared.result.assessment is not None else "wait"
+        self._state.checkpoint(
+            prepared.session,
+            event_type,
+            "Learner tutor turn was recorded.",
+            objective_id=prepared.result.current_objective_id,
+            citations=prepared.result.activity.citations,
+            transition_key=(
+                f"legacy-turn:{prepared.session.identifier}:"
+                f"{len(prepared.session.turns)}"
+            ),
+        )
         return prepared.result
 
     def _assess(
