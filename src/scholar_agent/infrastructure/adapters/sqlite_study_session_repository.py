@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
@@ -149,6 +150,36 @@ class SQLiteStudySessionRepository(StudySessionRepository):
                 "DELETE FROM document_briefs WHERE document_id = ?",
                 (document_id.value,),
             )
+
+    def detach_profile(self, profile_id: str) -> int:
+        """Detach matching sessions while retaining their complete history."""
+        with self._lock, self._connection:
+            rows = self._connection.execute(
+                "SELECT session_id, payload FROM study_sessions"
+            ).fetchall()
+            detached = 0
+            for row in rows:
+                payload = json.loads(str(row["payload"]))
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("learner_profile_id") != profile_id:
+                    continue
+                session = _session_from_payload(payload)
+                detached_session = replace(session, learner_profile_id=None)
+                updated_payload = json.dumps(
+                    _session_payload(detached_session), ensure_ascii=False
+                )
+                self._connection.execute(
+                    "UPDATE study_sessions SET payload = ?, updated_at = ? "
+                    "WHERE session_id = ?",
+                    (
+                        updated_payload,
+                        detached_session.updated_at.isoformat(),
+                        detached_session.identifier,
+                    ),
+                )
+                detached += 1
+        return detached
 
     def get_brief(self, document_id: DocumentId) -> DocumentBrief | None:
         """Return a cached document brief."""
@@ -373,7 +404,7 @@ def _turn_from_payload(payload: object) -> TutorTurn:
 
 def _session_payload(session: StudySession) -> dict[str, object]:
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "identifier": session.identifier,
         "document_id": session.document_id.value,
         "goal": session.goal,
@@ -393,6 +424,7 @@ def _session_payload(session: StudySession) -> dict[str, object]:
         "trace": [_trace_payload(item) for item in session.trace],
         "ledger": [_ledger_payload(item) for item in session.ledger],
         "action_count": session.action_count,
+        "learner_profile_id": session.learner_profile_id,
         "completed_at": (
             session.completed_at.isoformat()
             if session.completed_at is not None
@@ -406,11 +438,12 @@ def _session_from_payload(payload: dict[str, object]) -> StudySession:
     if (
         isinstance(schema_version, bool)
         or not isinstance(schema_version, int)
-        or schema_version not in (1, 2, 3)
+        or schema_version not in (1, 2, 3, 4)
     ):
         raise RuntimeError("Stored study session has an unsupported schema version.")
     is_v1 = schema_version == 1
-    is_v3 = schema_version == 3
+    has_ledger = schema_version in (3, 4)
+    is_v4 = schema_version == 4
     document_id = DocumentId(_string(payload, "document_id"))
     brief = _brief_from_payload(_mapping(payload.get("brief")))
     milestones = (
@@ -432,10 +465,10 @@ def _session_from_payload(payload: dict[str, object]) -> StudySession:
         tuple(
             _ledger_from_payload(item) for item in _objects(payload.get("ledger", []))
         )
-        if is_v3
+        if has_ledger
         else ()
     )
-    if is_v3:
+    if has_ledger:
         if any(
             reference.document_id != document_id
             for entry in ledger
@@ -496,6 +529,9 @@ def _session_from_payload(payload: dict[str, object]) -> StudySession:
             None
             if completed_at is None
             else datetime.fromisoformat(_string_value(completed_at, "completed_at"))
+        ),
+        learner_profile_id=(
+            _optional_string(payload.get("learner_profile_id")) if is_v4 else None
         ),
     )
 
@@ -871,6 +907,14 @@ def _datetime(payload: dict[str, object], key: str) -> datetime:
 def _string_value(value: object, field: str) -> str:
     if not isinstance(value, str):
         raise RuntimeError(f"Stored study field '{field}' must be text.")
+    return value
+
+
+def _optional_string(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError("Stored optional string is invalid.")
     return value
 
 

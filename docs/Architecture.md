@@ -147,10 +147,11 @@ question is the boundary between automatic work and learner input. Scores 0–1
 trigger cited search/remediation, score 2 produces another check, and score 3
 recomputes mastery before advancing.
 
-The SQLite adapter reads missing/schema-version-1 and version-2 payloads into
-the current domain shape and emits top-level `schema_version=3` on every save.
-The version is an adapter serialization detail, not a `StudySession` field.
-Version 3 stores an append-only, SHA-256 chained, bounded mission ledger inside
+The SQLite adapter reads missing/schema-version-1, version-2, and version-3
+payloads into the current domain shape and emits top-level `schema_version=4`
+on every save. The version is an adapter serialization detail, not a
+`StudySession` field. Version 3 and 4 store an append-only, SHA-256 chained,
+bounded mission ledger inside
 the aggregate. The Application mission state service is its only writer; the
 LangGraph adapter only routes graph state. API and UI routes expose additive
 status, plan, artifacts, pending interaction, trace, and completion fields; the
@@ -163,6 +164,14 @@ ledger without model calls. Record export includes only redacted transition
 summaries, replay-safe projections, citation identities, and artifact metadata;
 it excludes learner responses, prompts, reference answers, model output, and
 source excerpts.
+
+Phase 2 adds a separate local learner-profile database. Profiles store only
+stable concept descriptors, redacted evidence observations, consented
+cross-document equivalence links, and deterministic review scheduling state.
+Mission assessments synchronize after their mission snapshot is saved; an
+explicit resynchronization repairs profile-write failures without rolling back
+mission history. Profile deletion cascades profile data and detaches sessions
+while retaining PDFs and mission records.
 
 ## Mission learner loop
 

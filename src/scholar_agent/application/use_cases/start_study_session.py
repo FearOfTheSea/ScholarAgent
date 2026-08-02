@@ -26,6 +26,9 @@ from scholar_agent.domain.entities.study_session import (
     TutorTurnKind,
     objective_progress,
 )
+from scholar_agent.domain.repositories.learner_profile_repository import (
+    LearnerProfileRepository,
+)
 from scholar_agent.domain.repositories.study_session_repository import (
     StudySessionRepository,
 )
@@ -41,12 +44,14 @@ class StartStudySessionUseCase:
         validation_service: RequestValidationService,
         mission_planner: MissionPlanner | None = None,
         state_service: MissionStateService | None = None,
+        profile_repository: LearnerProfileRepository | None = None,
     ) -> None:
         self._brief_use_case = brief_use_case
         self._session_repository = session_repository
         self._validation_service = validation_service
         self._mission_planner = mission_planner
         self._state = state_service or MissionStateService(session_repository)
+        self._profile_repository = profile_repository
 
     def execute(self, request: StartStudySessionRequest) -> StudySessionResult:
         """Validate, persist, and return a new guided session."""
@@ -54,6 +59,10 @@ class StartStudySessionUseCase:
         if request.target_minutes < 5 or request.target_minutes > 240:
             raise ValueError("target_minutes must be between 5 and 240.")
         brief = self._brief_use_case.execute(request.document_id).brief
+        now = datetime.now(UTC)
+        profile_id = _resolve_profile_id(
+            request.learner_profile_id, self._profile_repository, now
+        )
         plan = (
             self._mission_planner.plan(
                 goal,
@@ -62,10 +71,11 @@ class StartStudySessionUseCase:
                 request.target_minutes,
                 brief,
             )
-            if self._mission_planner is not None
+            if self._mission_planner is not None and request.focus_objective_id is None
+            else _focused_plan(brief, goal, request.focus_objective_id)
+            if request.focus_objective_id is not None
             else _deterministic_plan(brief, goal, request.target_minutes)
         )
-        now = datetime.now(UTC)
         session = StudySession(
             identifier=str(uuid4()),
             document_id=request.document_id,
@@ -78,6 +88,7 @@ class StartStudySessionUseCase:
             milestones=build_mission_milestones(brief, plan, request.mode),
             created_at=now,
             updated_at=now,
+            learner_profile_id=profile_id,
         )
         session = self._state.checkpoint(
             session,
@@ -92,7 +103,10 @@ class StartStudySessionUseCase:
             citations=plan.citations,
             transition_key=f"plan-created:{session.identifier}",
         )
-        objective = brief.objectives[0]
+        objective_id = plan.objective_ids[0]
+        objective = next(
+            item for item in brief.objectives if item.identifier == objective_id
+        )
         activity = TutorActivity(
             kind=TutorTurnKind.QUESTION,
             message=(
@@ -125,3 +139,33 @@ def _deterministic_plan(
         for reference in objective.citations
     )
     return StudyPlan(goal, objective_ids, tuple(dict.fromkeys(citations)))
+
+
+def _focused_plan(
+    brief: DocumentBrief, goal: str, objective_id: str | None
+) -> StudyPlan:
+    if objective_id is None:
+        raise ValueError("A focused review mission requires an objective.")
+    objective = next(
+        (item for item in brief.objectives if item.identifier == objective_id), None
+    )
+    if objective is None:
+        raise ValueError(f"Objective '{objective_id}' was not found in the document.")
+    return StudyPlan(goal, (objective.identifier,), objective.citations)
+
+
+def _resolve_profile_id(
+    requested: str | None,
+    repository: LearnerProfileRepository | None,
+    now: datetime,
+) -> str:
+    if repository is None:
+        return requested or "local-default"
+    if requested is None:
+        try:
+            return repository.get_or_create_default(now).identifier
+        except Exception:
+            return "local-default"
+    if repository.get_profile(requested) is None:
+        raise ValueError(f"Learner profile '{requested}' was not found.")
+    return requested

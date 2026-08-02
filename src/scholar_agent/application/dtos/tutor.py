@@ -34,6 +34,8 @@ class StartStudySessionRequest:
     learner_level: LearnerLevel = LearnerLevel.INTERMEDIATE
     mode: StudyMode = StudyMode.GUIDED
     target_minutes: int = 30
+    learner_profile_id: str | None = None
+    focus_objective_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

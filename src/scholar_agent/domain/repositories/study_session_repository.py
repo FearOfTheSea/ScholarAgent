@@ -42,6 +42,10 @@ class StudySessionRepository(ABC):
         """Delete every session and brief for a document."""
 
     @abstractmethod
+    def detach_profile(self, profile_id: str) -> int:
+        """Remove a learner-profile association without deleting mission history."""
+
+    @abstractmethod
     def get_brief(self, document_id: DocumentId) -> DocumentBrief | None:
         """Return a cached document brief."""
 

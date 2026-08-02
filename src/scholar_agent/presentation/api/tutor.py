@@ -181,6 +181,7 @@ def start_session(
                 learner_level=LearnerLevel(request.learner_level),
                 mode=StudyMode(request.mode),
                 target_minutes=request.target_minutes,
+                learner_profile_id=request.learner_profile_id,
             )
         )
     except DocumentNotFoundError as error:
@@ -281,6 +282,7 @@ def _session_response(result: StudySessionResult) -> TutorSessionResponse:
     return TutorSessionResponse(
         session_id=session.identifier,
         document_id=session.document_id.value,
+        learner_profile_id=session.learner_profile_id,
         goal=session.goal,
         learner_level=session.learner_level.value,
         mode=session.mode.value,

@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     vector_db_path: Path = Path("data/vector_store")
     document_library_path: Path = Path("data/documents")
     catalog_db_path: Path = Path("data/catalog.sqlite3")
+    learner_profile_db_path: Path = Path("data/learner_profiles.sqlite3")
     embedding_model_name: str = Field(default="BAAI/bge-m3", min_length=1)
     embedding_device: str = Field(default="cpu", min_length=1)
     chunk_size: int = Field(default=800, ge=100)
@@ -47,6 +48,7 @@ class Settings(BaseSettings):
             "vector_db_path": self.vector_db_path,
             "document_library_path": self.document_library_path,
             "catalog_db_path": self.catalog_db_path,
+            "learner_profile_db_path": self.learner_profile_db_path,
             "embedding_model_name": self.embedding_model_name,
             "embedding_device": self.embedding_device,
             "chunk_size": self.chunk_size,

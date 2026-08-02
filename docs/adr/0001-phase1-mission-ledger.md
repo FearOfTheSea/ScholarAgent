@@ -21,7 +21,9 @@ insights and redacted records.
 
 SQLite serialization is adapter-owned: missing and schema versions 1 and 2
 read into the current domain shape with an empty ledger, while every subsequent
-save emits top-level `schema_version=3`. Current-schema loads validate the
+save emitted top-level `schema_version=3`. Phase 2 extends this adapter
+contract to read version 3 and emit version 4 with an optional profile
+association; current-schema loads still validate the
 sequence and digest chain before returning a session.
 
 ## Consequences

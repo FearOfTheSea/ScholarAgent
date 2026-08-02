@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
@@ -520,6 +520,7 @@ class StartTutorSessionRequestModel(BaseModel):
     learner_level: LearnerLevelName = "intermediate"
     mode: StudyModeName = "guided"
     target_minutes: int = 30
+    learner_profile_id: str | None = None
 
 
 class TutorSessionResponse(BaseModel):
@@ -527,6 +528,7 @@ class TutorSessionResponse(BaseModel):
 
     session_id: str
     document_id: str
+    learner_profile_id: str | None = None
     goal: str
     learner_level: LearnerLevelName
     mode: StudyModeName
@@ -571,3 +573,129 @@ class TutorTurnResultResponse(BaseModel):
     status: MissionStatusName = "active"
     can_advance: bool = True
     trace: list[MissionTraceEventResponse] = Field(default_factory=list)
+
+
+class LearnerProfileResponse(BaseModel):
+    """Local learner profile metadata."""
+
+    profile_id: str
+    display_name: str
+    target_date: date | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CreateLearnerProfileRequestModel(BaseModel):
+    """Create a private local profile."""
+
+    display_name: str
+    target_date: date | None = None
+
+
+class ImportLearnerProfileRequestModel(BaseModel):
+    """Import a complete profile only when replacement is explicit."""
+
+    replace: bool = False
+    payload: dict[str, object]
+
+
+class ConceptFingerprintResponse(BaseModel):
+    """Explainable stable concept identity."""
+
+    algorithm_version: str
+    fingerprint: str
+    document_id: str
+    normalized_title: str
+    normalized_description: str
+
+
+class ReviewQueueEntryResponse(BaseModel):
+    """Plain-language review recommendation and learning signals."""
+
+    fingerprint: ConceptFingerprintResponse
+    document_id: str
+    objective_id: str
+    title: str
+    description: str
+    confidence: int
+    uncertainty: int
+    observation_count: int
+    recall_count: int
+    transfer_count: int
+    last_observed_at: datetime | None
+    due_at: datetime
+    expected_minutes: int
+    reason_codes: list[str]
+    source_documents: list[str]
+
+
+class CitationIdentityRequestModel(BaseModel):
+    """Source identity without source excerpt."""
+
+    document_id: str
+    chunk_id: str
+    page_number: int | None = None
+
+
+class RecordReviewOutcomeRequestModel(BaseModel):
+    """Strict redacted review result."""
+
+    fingerprint: ConceptFingerprintResponse
+    objective_id: str
+    modality: Literal["recall", "transfer"]
+    score: int = Field(ge=0, le=3)
+    difficulty: int = Field(ge=1, le=3)
+    citations: list[CitationIdentityRequestModel]
+    observed_at: datetime | None = None
+
+
+class EvidenceObservationResponse(BaseModel):
+    """Stored review evidence without raw learner content."""
+
+    observation_id: str
+    profile_id: str
+    fingerprint: ConceptFingerprintResponse
+    document_id: str
+    objective_id: str
+    session_id: str | None
+    source: Literal["mission", "review"]
+    modality: Literal["recall", "transfer"]
+    score: int
+    difficulty: int
+    citations: list[CitationIdentityRequestModel]
+    observed_at: datetime
+
+
+class EquivalenceCandidateResponse(BaseModel):
+    """A proposed cross-document link awaiting consent."""
+
+    profile_id: str
+    source: ConceptFingerprintResponse
+    target: ConceptFingerprintResponse
+    similarity: float
+    created_at: datetime
+
+
+class EquivalenceDecisionRequestModel(BaseModel):
+    """Accept or reject one listed equivalence candidate."""
+
+    source_fingerprint: str
+    target_fingerprint: str
+    decision: Literal["accepted", "rejected"]
+
+
+class EquivalenceDecisionResponse(BaseModel):
+    """Persisted explicit equivalence decision."""
+
+    profile_id: str
+    source: ConceptFingerprintResponse
+    target: ConceptFingerprintResponse
+    decision: Literal["accepted", "rejected"]
+    decided_at: datetime
+
+
+class StartReviewMissionRequestModel(BaseModel):
+    """Start a mission for one resolved queue concept."""
+
+    fingerprint: str
+    as_of: datetime | None = None

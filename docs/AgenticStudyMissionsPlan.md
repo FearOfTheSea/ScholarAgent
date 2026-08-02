@@ -28,10 +28,10 @@ available, while `/agent/requests` remains the stateless Quick Ask contract.
 - Automatic work stops after four capability executions per advance and 64 per
   session. Optional artifact failures are isolated; core failures are persisted
   and resumable. Trace entries contain state and capability summaries only.
-- SQLite reads missing/version-1 and version-2 payloads into the current domain
-  shape, initializes an empty verified ledger, and writes top-level
-  `schema_version=3`; serialization version is not business state on
-  `StudySession`.
+- SQLite reads missing/version-1, version-2, and version-3 payloads into the
+  current domain shape, initializes an empty verified ledger when appropriate,
+  and writes top-level `schema_version=4`; serialization version is not
+  business state on `StudySession`.
 
 ## Mission Intelligence
 

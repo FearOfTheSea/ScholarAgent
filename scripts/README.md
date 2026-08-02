@@ -14,6 +14,7 @@ development utilities and do not change application-layer behavior.
 | `train_scholar_gpt.py` | Localizes cached GPT-2 124M with response-only instruction tuning, validation, early stopping, and resumable checkpoints. |
 | `evaluate_scholar_gpt.py` | Scores a ScholarGPT checkpoint against held-out planner, cited-material, document-map, mission-plan, explanation, assessment, and verification contracts. |
 | `evaluate_missions.py` | Runs the eight deterministic Phase 1 mission scenarios and writes the redacted release-gate report. |
+| `evaluate_reviews.py` | Runs the nine deterministic Phase 2 learner-model and review-memory scenarios. |
 
 ## Running the LLM-from-Scratch Demos
 
@@ -56,3 +57,13 @@ document-isolation details: applicable factual outputs must be cited to the
 selected document, every recorded tool call must use that document, and every
 normal scenario must verify its ledger. Non-factual scenarios are explicitly
 not applicable to those checks rather than passing vacuously.
+
+Phase 2 review memory evaluation:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/evaluate_reviews.py
+```
+
+This produces a versioned report for redaction, deterministic scheduling,
+confidence decay, transfer weighting, profile round trips, deletion and
+session detachment, equivalence consent, and one-document review dispatch.

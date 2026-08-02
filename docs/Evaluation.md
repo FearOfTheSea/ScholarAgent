@@ -27,7 +27,7 @@ chunk from the expected source page within `RETRIEVAL_TOP_K` results.
 `tests/test_mission_contracts.py` covers the offline mission boundary: strict
 segment-local citations and one repair, omitted versus explicit retrieval
 limits, document binding, the exact eight-capability catalog, direct DTO
-validation, v1/v2-read/v3-write persistence, planner fallback and prerequisite
+validation, v1/v2/v3-read/v4-write persistence, planner fallback and prerequisite
 capacity, remediation, bounded execution, resume, and mastery completion.
 The default suite also checks additive API serialization and the fresh-process
 Streamlit session-list path. No test permits an unfiltered agent search or a
@@ -35,9 +35,17 @@ material item without a validated citation.
 
 Phase 1 Mission Intelligence is covered by
 `tests/test_mission_intelligence.py`. It verifies canonical digest behavior,
-idempotent checkpoints, version-2 read/version-3 write migration, tamper
+idempotent checkpoints, version-2 read/version-4 write migration, tamper
 detection, every insight denominator and signal, redacted export fields, the
 three additive record endpoints, and the fresh-process UI panel.
+
+Phase 2 Durable Learner Model and Review Memory is covered by
+`tests/test_learner_profile_phase2.py`, `tests/test_learner_profile_api.py`,
+and `tests/test_review_evaluator.py`. These cover fingerprint stability,
+redacted/idempotent observations, schema-v4 association migration, tracing
+decay and modality weights, fixed-clock queue ordering and target dates,
+consent-gated equivalence, profile round trips, deletion detachment after
+reopen, and additive profile/review routes.
 
 Run the complete deterministic mission evaluator with:
 
@@ -63,6 +71,19 @@ aggregate gate requires at least one applicable scenario and all applicable
 checks to pass. The ledger gate additionally requires `ledger_verified: true`
 for every normal scenario, while tamper detection must pass with
 `ledger_verified: false`.
+
+Run the Phase 2 evaluator with:
+
+```powershell
+.\.venv\Scripts\python.exe scripts/evaluate_reviews.py
+```
+
+It writes the version-1 report to
+`data/evaluation/review_phase2_report.json` and runs nine deterministic
+scenarios. Its eight release gates require at least one applicable passing
+check and cover privacy redaction, scheduling, decay, transfer weighting,
+round-trip fidelity, deletion completeness, equivalence consent, and
+single-document review dispatch.
 
 ## Latest local result
 

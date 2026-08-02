@@ -241,7 +241,8 @@ Phase 1 is complete only when all of the following hold:
 - repeated saves do not duplicate a transition;
 - ledger verification survives a repository close/reopen cycle;
 - a modified historical entry is detected on load or explicit verification;
-- schema versions 1 and 2 read successfully and the next save writes version 3;
+- schema versions 1, 2, and 3 read successfully and the next save writes
+  version 4 with an optional profile association;
 - insights are identical before and after reload;
 - record export contains none of the forbidden raw fields;
 - API and UI tests cover the intelligence panel and all three endpoints;
@@ -303,6 +304,32 @@ without letting stale confidence silently control a new mission.
 - Transfer checks affect confidence more than repeated recall checks, with the
   weighting documented and tested.
 - No profile operation broadens a capability execution beyond one document.
+
+### Phase 2 implementation record
+
+Phase 2 is implemented as a local, profile-scoped learner model. New study
+sessions optionally persist a learner-profile association in schema version 4;
+older session payloads remain readable and detached. Redacted evidence
+observations feed deterministic confidence, uncertainty, decay, and review
+scheduling without storing learner responses, prompts, model output, reference
+answers, or source excerpts. Cross-document concept equivalence is
+consent-gated: proposals and rejections do not pool history, while accepted
+links preserve source-document provenance.
+
+Mission assessments write idempotent observations through the central
+application checkpoint path, and review missions resolve one document and one
+objective. The Today view, profile management, import/export, deletion, API
+routes, and deterministic review evaluator are included. Profile deletion
+cascades local learner data and detaches sessions; legacy equivalence rows are
+reconciled or dropped safely when ownership is ambiguous. The Phase 2
+evaluator covers nine scenarios and eight release gates, including privacy,
+determinism, decay, weighting, round trips, deletion, consent, and document
+isolation.
+
+Phase 3+ work remains deferred: rich document structure and OCR, new
+capabilities, adaptive pedagogy, evidence reasoning, curriculum orchestration,
+teacher/interoperability features, authentication, remote accounts, cloud
+telemetry, notifications, and generation-prompt changes.
 
 ---
 
@@ -561,7 +588,8 @@ This is the handoff sequence for the next implementation session.
 1. **Contracts and migration**
    - Add ledger event/projection types and canonical digest functions.
    - Add the bounded ledger to `StudySession`.
-   - Implement version-1/version-2 reads and version-3 writes.
+   - Implement version-1/version-2/version-3 reads and version-4 writes with
+     an optional learner-profile association.
    - Test canonicalization, chain validation, tamper detection, idempotency, and
      migration before changing the runner.
 2. **Application integration**

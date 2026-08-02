@@ -274,7 +274,7 @@ def _session(identifier: str, document_id: str = "document-1") -> StudySession:
     )
 
 
-def test_v1_reads_current_shape_and_save_writes_schema_version_three(
+def test_v1_reads_current_shape_and_save_writes_schema_version_four(
     tmp_path: Path,
 ) -> None:
     repository = SQLiteStudySessionRepository(tmp_path / "catalog.sqlite3")
@@ -314,7 +314,7 @@ def test_v1_reads_current_shape_and_save_writes_schema_version_three(
     row = repository._connection.execute(  # type: ignore[attr-defined]
         "SELECT payload FROM study_sessions WHERE session_id = ?", ("legacy",)
     ).fetchone()
-    assert json.loads(row[0])["schema_version"] == 3
+    assert json.loads(row[0])["schema_version"] == 4
 
 
 def test_repository_lists_filters_completes_and_cascades(tmp_path: Path) -> None:

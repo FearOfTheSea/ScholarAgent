@@ -315,7 +315,7 @@ def _scenario_v2_upgrade(root: Path) -> dict[str, Any]:
         "SELECT payload FROM study_sessions WHERE session_id = ?", ("v2",)
     ).fetchone()
     return _scenario_result(
-        json.loads(row[0])["schema_version"] == 3,
+        json.loads(row[0])["schema_version"] == 4,
         restored,
         None,
         repository,

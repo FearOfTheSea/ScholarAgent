@@ -19,6 +19,7 @@ from scholar_agent.application.services.mission_state import MissionStateService
 from scholar_agent.application.services.mission_steps import MissionStep
 from scholar_agent.domain.entities.study_session import (
     LearnerAttempt,
+    LearningObjective,
     MissionStatus,
     PendingLearnerInteraction,
     StudySession,
@@ -132,15 +133,26 @@ class MissionAssessmentService:
         progress = objective_progress(pending.objective_id, session.attempts)
         activity_message = f"**Assessment: {score}/3.** {feedback}"
         if score == 2 or progress.label.value != "mastered":
+            objective = next(
+                (
+                    item
+                    for item in session.brief.objectives
+                    if item.identifier == pending.objective_id
+                ),
+                None,
+            )
+            if objective is None:
+                raise ValueError("Pending assessment objective was not found.")
+            transfer_question = _transfer_challenge(objective)
             session = self._state.set_pending(
                 session,
                 PendingLearnerInteraction(
                     pending.objective_id,
-                    next_question,
+                    transfer_question,
                     citations=citations,
                 ),
             )
-            activity_message += f"\n\n**Next challenge:** {next_question}"
+            activity_message += f"\n\n**Next challenge:** {transfer_question}"
             return MissionStep(
                 session,
                 TutorActivity(
@@ -228,3 +240,12 @@ class MissionAssessmentService:
             ),
             2,
         )
+
+
+def _transfer_challenge(objective: LearningObjective) -> str:
+    """Create the visible, deterministic challenge after a proficient check."""
+    return (
+        "Transfer/application challenge: apply the objective "
+        f'"{objective.title}" to a new situation or example. '
+        f'Explain how "{objective.description}" would work there.'
+    )

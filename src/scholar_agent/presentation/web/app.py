@@ -1,7 +1,9 @@
 """Streamlit user interface for the local study library."""
 
+import json
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import streamlit as st
@@ -19,11 +21,15 @@ from scholar_agent.application.dtos.documents import (
     DeleteDocumentRequest,
     IngestDocumentRequest,
 )
+from scholar_agent.application.dtos.learner_profile import CreateLearnerProfileRequest
 from scholar_agent.application.dtos.mission import AdvanceStudyMissionRequest
 from scholar_agent.application.dtos.retrieval import RetrievedChunk
 from scholar_agent.application.dtos.tutor import (
     StartStudySessionRequest,
     TutorActivity,
+)
+from scholar_agent.application.use_cases.import_learner_profile import (
+    ImportLearnerProfileRequest,
 )
 from scholar_agent.config.settings import Settings
 from scholar_agent.domain.entities.document import Document
@@ -62,11 +68,13 @@ def main() -> None:
             st.warning("Local model unavailable")
         page = st.radio(
             "Navigation",
-            ("Library", "Study Mission", "Quick Ask"),
+            ("Today", "Library", "Study Mission", "Quick Ask"),
         )
 
     st.title("ScholarAgent")
-    if page == "Library":
+    if page == "Today":
+        _render_today(container)
+    elif page == "Library":
         _render_library(container, documents)
     elif page == "Quick Ask":
         _render_ask_study_agent(container, documents)
@@ -106,13 +114,121 @@ def _render_library(container: Container, documents: tuple[Document, ...]) -> No
     for document in documents:
         left_column, right_column = st.columns([5, 1])
         left_column.write(
-            f"**{document.title}** — {document.page_count} pages — {document.source}",
+            f"**{document.title}** - {document.page_count} pages - {document.source}",
         )
         if right_column.button("Delete", key=f"delete-{document.identifier.value}"):
             container.delete_document_use_case().execute(
                 DeleteDocumentRequest(document.identifier),
             )
             st.rerun()
+
+
+def _render_today(container: Container) -> None:
+    """Show plain-language review recommendations for the selected profile."""
+    st.subheader("Today")
+    st.caption("A private local view of what may be useful to review next.")
+    profiles = container.list_learner_profiles_use_case().execute()
+    if not profiles:
+        st.info("Create a learner profile to start building review memory.")
+        _render_profile_controls(container, None)
+        return
+    choices = {profile.identifier: profile for profile in profiles}
+    selected_id = st.selectbox(
+        "Learner profile",
+        tuple(choices),
+        format_func=lambda identifier: choices[identifier].display_name,
+        key="today-profile",
+    )
+    try:
+        queue = container.get_review_queue_use_case().execute(selected_id)
+    except (RuntimeError, ValueError) as error:
+        st.error(str(error))
+        queue = ()
+    if not queue:
+        st.success("No review concepts are available yet.")
+    for entry in queue:
+        with st.container(border=True):
+            st.markdown(f"### {entry.title.title()}")
+            st.write(entry.description)
+            st.caption(
+                f"Source document: {entry.document_id} · "
+                f"Confidence signal: {entry.confidence}% · "
+                f"Uncertainty signal: {entry.uncertainty}%"
+            )
+            st.write(
+                f"{format_due_label(entry.due_at)} · Reason: "
+                f"{', '.join(item.replace('_', ' ') for item in entry.reason_codes)} · "
+                f"about {entry.expected_minutes} minutes"
+            )
+            if st.button("Start review", key=f"review-{entry.fingerprint.value}"):
+                try:
+                    result = container.start_review_mission_use_case().execute(
+                        selected_id, entry.fingerprint.value
+                    )
+                    st.session_state["study_mission_session_id"] = (
+                        result.session.identifier
+                    )
+                    st.session_state["study_mission_activity"] = result.activity
+                    st.rerun()
+                except (RuntimeError, ValueError) as error:
+                    st.error(str(error))
+    _render_profile_controls(container, selected_id)
+
+
+def format_due_label(due_at: datetime, as_of: datetime | None = None) -> str:
+    """Format review timing without exposing scheduler internals."""
+    moment = as_of or datetime.now(UTC)
+    if due_at <= moment:
+        return "Due now"
+    local_due = due_at.astimezone()
+    hour = local_due.strftime("%I").lstrip("0") or "12"
+    return (
+        f"Upcoming: {local_due.strftime('%b')} {local_due.day} at "
+        f"{hour}:{local_due:%M} {local_due:%p}"
+    )
+
+
+def _render_profile_controls(container: Container, profile_id: str | None) -> None:
+    with st.expander("Manage learner profiles"):
+        with st.form("create-profile"):
+            display_name = st.text_input("Profile name", value="Local learner")
+            create = st.form_submit_button("Create profile")
+        if create:
+            try:
+                container.create_learner_profile_use_case().execute(
+                    CreateLearnerProfileRequest(display_name)
+                )
+                st.rerun()
+            except (RuntimeError, ValueError) as error:
+                st.error(str(error))
+        if profile_id is not None:
+            export = container.export_learner_profile_use_case().execute(profile_id)
+            st.download_button(
+                "Export profile",
+                data=json.dumps(export, indent=2),
+                file_name=f"{profile_id}.json",
+                mime="application/json",
+            )
+            confirm = st.checkbox(
+                "I understand this removes this profile's review memory."
+            )
+            if confirm and st.button("Delete profile"):
+                container.delete_learner_profile_use_case().execute(profile_id)
+                st.success("Profile deleted; mission history was kept.")
+                st.rerun()
+        import_file = st.file_uploader("Import profile", type=["json"])
+        replace_existing = st.checkbox("Replace an existing profile during import.")
+        if import_file is not None and st.button("Import profile"):
+            try:
+                payload = json.loads(import_file.getvalue().decode("utf-8"))
+                imported_id = payload["profile"]["identifier"]
+                container.import_learner_profile_use_case().execute(
+                    ImportLearnerProfileRequest(imported_id, payload, replace_existing)
+                )
+                st.success("Profile imported locally.")
+                st.rerun()
+            except (KeyError, RuntimeError, TypeError, ValueError) as error:
+                st.error(f"Profile import failed: {error}")
 
 
 def _render_ask_study_agent(
@@ -309,6 +425,18 @@ def _render_start_session(
     document = _select_document(documents, "Mission document")
     if document is None:
         return
+    profiles = container.list_learner_profiles_use_case().execute()
+    profile_choices = {profile.identifier: profile for profile in profiles}
+    profile_id = (
+        st.selectbox(
+            "Learner profile",
+            tuple(profile_choices),
+            format_func=lambda identifier: profile_choices[identifier].display_name,
+            key="mission-profile",
+        )
+        if profile_choices
+        else None
+    )
     with st.form("start-study-mission"):
         goal = st.text_input(
             "Learning goal",
@@ -344,6 +472,7 @@ def _render_start_session(
                         learner_level=level,
                         mode=mode,
                         target_minutes=int(minutes),
+                        learner_profile_id=profile_id,
                     )
                 )
             st.session_state["study_mission_session_id"] = result.session.identifier

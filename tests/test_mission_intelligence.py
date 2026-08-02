@@ -115,7 +115,7 @@ def test_ledger_capacity_fails_recoverably_without_truncating() -> None:
     assert len(failed.ledger) == 512
 
 
-def test_v2_reads_empty_ledger_and_next_save_emits_v3(tmp_path: Path) -> None:
+def test_v2_reads_empty_ledger_and_next_save_emits_v4(tmp_path: Path) -> None:
     repository = SQLiteStudySessionRepository(tmp_path / "catalog.sqlite3")
     session = _session()
     payload = _session_payload(session)
@@ -140,7 +140,7 @@ def test_v2_reads_empty_ledger_and_next_save_emits_v3(tmp_path: Path) -> None:
         "SELECT payload FROM study_sessions WHERE session_id = ?",
         (session.identifier,),
     ).fetchone()
-    assert json.loads(row[0])["schema_version"] == 3
+    assert json.loads(row[0])["schema_version"] == 4
     repository.close()
 
 

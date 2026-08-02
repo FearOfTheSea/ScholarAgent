@@ -5,6 +5,9 @@ from datetime import UTC, datetime
 
 from scholar_agent.application.dtos.tutor import TutorActivity
 from scholar_agent.application.services.mission_ledger import MissionLedgerService
+from scholar_agent.application.services.mission_observations import (
+    MissionObservationSyncService,
+)
 from scholar_agent.domain.entities.study_session import (
     MissionLedgerEventType,
     MissionStatus,
@@ -26,9 +29,11 @@ class MissionStateService:
         self,
         session_repository: StudySessionRepository,
         ledger_service: MissionLedgerService | None = None,
+        observation_sync: MissionObservationSyncService | None = None,
     ) -> None:
         self._session_repository = session_repository
         self._ledger = ledger_service or MissionLedgerService()
+        self._observation_sync = observation_sync
 
     def load(self, session_id: str) -> StudySession:
         """Load one session or raise the existing not-found contract."""
@@ -93,6 +98,8 @@ class MissionStateService:
             transition_key=transition_key,
         )
         self._session_repository.save(updated)
+        if self._observation_sync is not None:
+            self._observation_sync.sync_best_effort(updated)
         return updated
 
     def set_pending(

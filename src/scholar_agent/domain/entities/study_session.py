@@ -274,6 +274,7 @@ class StudySession:
     ledger: tuple[MissionLedgerEntry, ...] = ()
     action_count: int = 0
     completed_at: datetime | None = None
+    learner_profile_id: str | None = None
 
 
 def objective_progress(

@@ -2,15 +2,26 @@
 
 from dependency_injector import containers, providers
 
+from scholar_agent.application.services.concept_equivalence import (
+    DeterministicConceptEquivalenceProposer,
+)
 from scholar_agent.application.services.generation_count_policy import (
     GenerationCountPolicy,
 )
+from scholar_agent.application.services.knowledge_tracing import KnowledgeTracingService
+from scholar_agent.application.services.learner_profile_serialization import (
+    LearnerProfileSerializationService,
+)
 from scholar_agent.application.services.mission_insights import MissionInsightsService
+from scholar_agent.application.services.mission_observations import (
+    MissionObservationSyncService,
+)
 from scholar_agent.application.services.mission_planning import MissionPlanner
 from scholar_agent.application.services.mission_state import MissionStateService
 from scholar_agent.application.services.request_validation_service import (
     RequestValidationService,
 )
+from scholar_agent.application.services.review_scheduler import ReviewScheduler
 from scholar_agent.application.services.tutor_turn_service import TutorTurnService
 from scholar_agent.application.use_cases.advance_study_session import (
     AdvanceStudySessionUseCase,
@@ -32,11 +43,23 @@ from scholar_agent.application.use_cases.complete_study_session import (
 from scholar_agent.application.use_cases.continue_study_session import (
     ContinueStudySessionUseCase,
 )
+from scholar_agent.application.use_cases.create_learner_profile import (
+    CreateLearnerProfileUseCase,
+)
+from scholar_agent.application.use_cases.decide_equivalence import (
+    DecideEquivalenceUseCase,
+)
 from scholar_agent.application.use_cases.delete_document import DeleteDocumentUseCase
+from scholar_agent.application.use_cases.delete_learner_profile import (
+    DeleteLearnerProfileUseCase,
+)
 from scholar_agent.application.use_cases.delete_study_session import (
     DeleteStudySessionUseCase,
 )
 from scholar_agent.application.use_cases.explain_concept import ExplainConceptUseCase
+from scholar_agent.application.use_cases.export_learner_profile import (
+    ExportLearnerProfileUseCase,
+)
 from scholar_agent.application.use_cases.export_mission_record import (
     ExportMissionRecordUseCase,
 )
@@ -44,20 +67,45 @@ from scholar_agent.application.use_cases.generate_flashcards import (
     GenerateFlashcardsUseCase,
 )
 from scholar_agent.application.use_cases.generate_quiz import GenerateQuizUseCase
+from scholar_agent.application.use_cases.get_learner_profile import (
+    GetLearnerProfileUseCase,
+)
 from scholar_agent.application.use_cases.get_mission_insights import (
     GetMissionInsightsUseCase,
 )
+from scholar_agent.application.use_cases.get_review_queue import GetReviewQueueUseCase
 from scholar_agent.application.use_cases.get_study_session import GetStudySessionUseCase
+from scholar_agent.application.use_cases.import_learner_profile import (
+    ImportLearnerProfileUseCase,
+)
 from scholar_agent.application.use_cases.ingest_document import IngestDocumentUseCase
 from scholar_agent.application.use_cases.list_documents import ListDocumentsUseCase
+from scholar_agent.application.use_cases.list_equivalence_candidates import (
+    ListEquivalenceCandidatesUseCase,
+)
+from scholar_agent.application.use_cases.list_equivalence_decisions import (
+    ListEquivalenceDecisionsUseCase,
+)
+from scholar_agent.application.use_cases.list_learner_profiles import (
+    ListLearnerProfilesUseCase,
+)
 from scholar_agent.application.use_cases.list_study_sessions import (
     ListStudySessionsUseCase,
+)
+from scholar_agent.application.use_cases.record_review_outcome import (
+    RecordReviewOutcomeUseCase,
+)
+from scholar_agent.application.use_cases.start_review_mission import (
+    StartReviewMissionUseCase,
 )
 from scholar_agent.application.use_cases.start_study_session import (
     StartStudySessionUseCase,
 )
 from scholar_agent.application.use_cases.summarize_document import (
     SummarizeDocumentUseCase,
+)
+from scholar_agent.application.use_cases.sync_mission_observations import (
+    SyncMissionObservationsUseCase,
 )
 from scholar_agent.application.use_cases.verify_mission_ledger import (
     VerifyMissionLedgerUseCase,
@@ -90,6 +138,9 @@ from scholar_agent.infrastructure.adapters.sentence_transformer_embedding import
 )
 from scholar_agent.infrastructure.adapters.sqlite_document_repository import (
     SQLiteDocumentRepository,
+)
+from scholar_agent.infrastructure.adapters.sqlite_learner_profile_repository import (
+    SQLiteLearnerProfileRepository,
 )
 from scholar_agent.infrastructure.adapters.sqlite_study_session_repository import (
     SQLiteStudySessionRepository,
@@ -174,9 +225,20 @@ class Container(containers.DeclarativeContainer):
         SQLiteStudySessionRepository,
         database_path=config.catalog_db_path,
     )
+    learner_profile_repository = providers.Singleton(
+        SQLiteLearnerProfileRepository,
+        database_path=config.learner_profile_db_path,
+        session_repository=study_session_repository,
+    )
+    mission_observation_sync = providers.Factory(
+        MissionObservationSyncService,
+        profile_repository=learner_profile_repository,
+        session_repository=study_session_repository,
+    )
     mission_state_service = providers.Factory(
         MissionStateService,
         session_repository=study_session_repository,
+        observation_sync=mission_observation_sync,
     )
     memory_store = providers.Singleton(InMemoryStore)
     mission_planner = providers.Factory(
@@ -328,6 +390,7 @@ class Container(containers.DeclarativeContainer):
         validation_service=validation_service,
         mission_planner=mission_planner,
         state_service=mission_state_service,
+        profile_repository=learner_profile_repository,
     )
     tutor_turn_service = providers.Factory(
         TutorTurnService,
@@ -391,6 +454,60 @@ class Container(containers.DeclarativeContainer):
         ExportMissionRecordUseCase,
         session_repository=study_session_repository,
         insights_use_case=mission_insights_use_case,
+    )
+    knowledge_tracing = providers.Factory(KnowledgeTracingService)
+    review_scheduler = providers.Factory(ReviewScheduler, tracing=knowledge_tracing)
+    profile_serialization = providers.Singleton(LearnerProfileSerializationService)
+    equivalence_proposer = providers.Singleton(DeterministicConceptEquivalenceProposer)
+    sync_mission_observations_use_case = providers.Factory(
+        SyncMissionObservationsUseCase, sync_service=mission_observation_sync
+    )
+    create_learner_profile_use_case = providers.Factory(
+        CreateLearnerProfileUseCase, repository=learner_profile_repository
+    )
+    list_learner_profiles_use_case = providers.Factory(
+        ListLearnerProfilesUseCase, repository=learner_profile_repository
+    )
+    get_learner_profile_use_case = providers.Factory(
+        GetLearnerProfileUseCase, repository=learner_profile_repository
+    )
+    delete_learner_profile_use_case = providers.Factory(
+        DeleteLearnerProfileUseCase, repository=learner_profile_repository
+    )
+    export_learner_profile_use_case = providers.Factory(
+        ExportLearnerProfileUseCase,
+        repository=learner_profile_repository,
+        serialization=profile_serialization,
+    )
+    import_learner_profile_use_case = providers.Factory(
+        ImportLearnerProfileUseCase,
+        repository=learner_profile_repository,
+        serialization=profile_serialization,
+    )
+    get_review_queue_use_case = providers.Factory(
+        GetReviewQueueUseCase,
+        profile_repository=learner_profile_repository,
+        scheduler=review_scheduler,
+        sync_service=mission_observation_sync,
+    )
+    record_review_outcome_use_case = providers.Factory(
+        RecordReviewOutcomeUseCase, profile_repository=learner_profile_repository
+    )
+    list_equivalence_candidates_use_case = providers.Factory(
+        ListEquivalenceCandidatesUseCase,
+        repository=learner_profile_repository,
+        proposer=equivalence_proposer,
+    )
+    decide_equivalence_use_case = providers.Factory(
+        DecideEquivalenceUseCase, repository=learner_profile_repository
+    )
+    list_equivalence_decisions_use_case = providers.Factory(
+        ListEquivalenceDecisionsUseCase, repository=learner_profile_repository
+    )
+    start_review_mission_use_case = providers.Factory(
+        StartReviewMissionUseCase,
+        queue_use_case=get_review_queue_use_case,
+        start_session=start_study_session_use_case,
     )
 
 

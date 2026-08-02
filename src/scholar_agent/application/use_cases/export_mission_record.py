@@ -46,7 +46,7 @@ class ExportMissionRecordUseCase:
 def _record(session: StudySession, insights: MissionInsights) -> dict[str, object]:
     return {
         "record_version": 1,
-        "session_schema_version": 3,
+        "session_schema_version": 4,
         "session": {
             "session_id": session.identifier,
             "document_id": session.document_id.value,
